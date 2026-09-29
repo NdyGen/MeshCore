@@ -9,6 +9,10 @@
 //! - [`system`], [`transport`], [`cli`]: clock, randomness, stdio and serial port, command line.
 
 pub mod domain;
+pub mod mailbox;
 pub mod protocol;
+pub mod session;
 pub mod storage;
+pub mod system;
+pub mod transport;
 pub mod types;
