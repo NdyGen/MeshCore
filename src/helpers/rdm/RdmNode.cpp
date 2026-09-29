@@ -246,9 +246,11 @@ void Node::onCtrlTxt(const uint8_t sender_pub[32], const uint8_t* data, size_t l
   codec::MbxInfo info;
   if (!enabled() || !codec::parseCtrlPlain(data, len, ts, info)) return;
 
-  size_t plain_len = info.sub == CTRL_MBX_INFO ? 47 : 7;   // the ACK covers the plaintext without block padding
-  uint8_t ack[4];
-  crypto::ctrlAck(ack, data, plain_len, sender_pub);
+  // The ACK covers the plaintext without block padding; parse accepted only zeros after it, so rebuilding
+  // from the parsed fields gives exactly the sender's bytes.
+  uint8_t plain[codec::CTRL_INFO_LEN], ack[4];
+  size_t plain_len = codec::buildCtrlPlain(plain, ts, info);
+  crypto::ctrlAck(ack, plain, plain_len, sender_pub);
   _host.sendAck(sender_pub, ack, 4);
 
   uint32_t t = now();
@@ -462,7 +464,7 @@ bool Node::setOwnMailbox(const uint8_t* mbx_pub, const uint8_t* k_owner) {
     uint8_t pub[32];
     bool fav = false, path = false;
     if (!_host.lookupContact(targets[k], pub, fav, path) || !fav) continue;
-    uint8_t plain[47];
+    uint8_t plain[codec::CTRL_INFO_LEN];
     size_t n = buildMbxCtrl(plain, pub);
     if (n) ob.addCtrl(targets[k], plain, n, t);
   }
@@ -506,7 +508,7 @@ void Node::maybeSendMbxInfo(const uint8_t sender_pub[32]) {
   if (!_host.lookupContact(sender_pub, pub, fav, path) || !fav) return;
   const ContactRdm* c = _contacts.get().find(sender_pub);
   if (c && (c->flags & CR_MBX_INFO_SENT)) return;
-  uint8_t plain[47];
+  uint8_t plain[codec::CTRL_INFO_LEN];
   size_t n = buildMbxCtrl(plain, pub);
   if (n) _outbox.get().addCtrl(sender_pub, plain, n, _now);   // Outbox ignores a repeat of an unacknowledged one
 }
@@ -603,15 +605,8 @@ bool Node::txIdle() { return _host.txIdle(); }
 
 bool Node::sendDm(const OutEntry& e, uint8_t attempt, bool flood, uint32_t& est_timeout_ms) {
   uint8_t plain[5 + MAX_TEXT + 3];
-  size_t n;
-  if (e.flags & OF_CTRL) {
-    memcpy(plain, &e.ts, 4);
-    plain[4] = TXT_TYPE_RDM_CTRL << 2;
-    memcpy(plain + 5, e.text, e.text_len);
-    n = 5 + e.text_len;
-  } else {
-    n = codec::buildTxtPlain(plain, e.ts, 0, attempt, e.text, e.text_len, true);
-  }
+  size_t n = (e.flags & OF_CTRL) ? codec::ctrlPlainFromBody(plain, e.ts, (const uint8_t*)e.text, e.text_len)
+                                 : codec::buildTxtPlain(plain, e.ts, 0, attempt, e.text, e.text_len, true);
   return n && _host.sendTxtPlain(e.pub_prefix, plain, n, flood, est_timeout_ms);
 }
 

@@ -7,8 +7,6 @@ namespace rdm { namespace codec {
 // BaseChatMesh.h MAX_TEXT_LEN: a DM without the RDM trailer keeps the upstream limits.
 static const size_t UPSTREAM_MAX_TEXT_LEN = 160;
 static const uint8_t CTRL_FLAGS = TXT_TYPE_RDM_CTRL << 2;
-static const size_t CTRL_INFO_LEN = 47;
-static const size_t CTRL_REVOKE_LEN = 7;
 static const size_t REG_REQ_LEN = 19;
 static const size_t REG_RESP_LEN = 7;
 static const size_t DEPOSIT_RESP_LEN = 13;
@@ -100,6 +98,14 @@ size_t buildCtrlPlain(uint8_t* out, uint32_t ts, const MbxInfo& info) {
   memcpy(&out[7], info.mbx_pub, 32);
   memcpy(&out[39], info.token, 8);
   return CTRL_INFO_LEN;
+}
+
+size_t ctrlPlainFromBody(uint8_t* out, uint32_t ts, const uint8_t* body, size_t len) {
+  if (len > MAX_TEXT) return 0;
+  put32(out, ts);
+  out[4] = CTRL_FLAGS;
+  memcpy(&out[5], body, len);
+  return 5 + len;
 }
 
 bool parseCtrlPlain(const uint8_t* data, size_t len, uint32_t& ts, MbxInfo& out) {

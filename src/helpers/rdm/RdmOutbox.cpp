@@ -257,10 +257,8 @@ void Outbox::computeAcks(Slot& s) {
   const OutEntry& e = s.e;
   if (isCtrl(e)) {
     uint8_t plain[5 + MAX_TEXT];
-    put32(plain, e.ts);
-    plain[4] = TXT_TYPE_RDM_CTRL << 2;
-    memcpy(plain + 5, e.text, e.text_len);
-    crypto::ctrlAck(s.ack_r[0], plain, 5 + e.text_len, _self);
+    size_t n = codec::ctrlPlainFromBody(plain, e.ts, (const uint8_t*)e.text, e.text_len);
+    crypto::ctrlAck(s.ack_r[0], plain, n, _self);
     memset(s.ack_s, 0, sizeof(s.ack_s));
     return;
   }
