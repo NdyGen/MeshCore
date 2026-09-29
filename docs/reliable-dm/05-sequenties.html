@@ -1,0 +1,1094 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DM-sequenties</title>
+<meta name="description" content="05: Sequenties van DM's tussen Bob en Alice: sequence diagrams van betrouwbare DM's tussen Bob en Alice volgens 03-ontwerp.md">
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #fbfbfa;
+  --surface: #ffffff;
+  --text: #1d1f23;
+  --muted: #5b6069;
+  --border: #dcdfe4;
+  --accent: #2458c6;
+  --code-bg: #f1f2f4;
+  --th-bg: #f4f5f7;
+  --gap-bg: #fff6e0;
+  --gap-border: #e0b44a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a;
+    --surface: #1c1f23;
+    --text: #e4e6ea;
+    --muted: #a0a6b0;
+    --border: #33373e;
+    --accent: #7aa7ff;
+    --code-bg: #262a30;
+    --th-bg: #22262b;
+    --gap-bg: #2c2618;
+    --gap-border: #a8852f;
+  }
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 16px; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+.layout {
+  display: grid;
+  grid-template-columns: 17rem minmax(0, 1fr);
+  gap: 2.5rem;
+  max-width: 96rem;
+  margin: 0 auto;
+  padding: 2rem 2rem 4rem;
+}
+nav.toc {
+  position: sticky;
+  top: 1rem;
+  align-self: start;
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+nav.toc h2 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 0.5rem; border: 0; padding: 0; }
+nav.toc ol { list-style: none; margin: 0; padding: 0; }
+nav.toc ol ol { padding-left: 0.9rem; margin: 0.2rem 0 0.4rem; }
+nav.toc li { margin: 0.2rem 0; }
+nav.toc a { color: var(--muted); text-decoration: none; }
+nav.toc a:hover { color: var(--accent); }
+main { min-width: 0; }
+.prose { max-width: 52rem; }
+h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 1rem; }
+h2 { font-size: 1.45rem; margin: 2.8rem 0 0.8rem; padding-bottom: 0.3rem; border-bottom: 1px solid var(--border); }
+h3 { font-size: 1.15rem; margin: 2.4rem 0 0.6rem; }
+p, ul, ol { margin: 0.6rem 0; }
+main > p, main > ul { max-width: 52rem; }
+a { color: var(--accent); }
+code {
+  font: 0.86em/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--code-bg);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+.table-wrap { overflow-x: auto; margin: 0.8rem 0 1.2rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--border); }
+th { background: var(--th-bg); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+figure.diagram {
+  margin: 1rem 0 1.2rem;
+  padding: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+figure.diagram svg { display: block; margin: 0 auto; height: auto; }
+pre.mermaid-src { margin: 0; white-space: pre; font: 0.8rem/1.4 ui-monospace, Menlo, monospace; color: var(--muted); }
+figure.diagram.rendered pre.mermaid-src { display: none; }
+.render-error { color: #c62828; font-weight: 600; }
+ul.gaps {
+  background: var(--gap-bg);
+  border-left: 3px solid var(--gap-border);
+  border-radius: 0 6px 6px 0;
+  padding: 0.5rem 0.8rem 0.5rem 1.8rem;
+  max-width: 52rem;
+}
+@media (max-width: 960px) {
+  .layout { display: block; padding: 1rem 16px 3rem; }
+  nav.toc { position: static; max-height: none; margin-bottom: 1.5rem; padding: 0.8rem 1rem; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+  h1 { font-size: 1.5rem; }
+  h2 { font-size: 1.25rem; }
+  figure.diagram { padding: 0.6rem; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc" aria-label="Inhoud">
+<h2>Inhoud</h2>
+<ol><li><a href="#legenda">Legenda</a></li><li><a href="#overzicht">Overzicht</a></li><li><a href="#zonder-mailbox">Zonder mailbox</a><ol><li><a href="#1-basis-beide-radios-en-apps-online">1. Basis: beide radio's en apps online</a></li><li><a href="#2-alice-telefoon-offline-radio-aan">2. Alice' telefoon offline, radio aan</a></li><li><a href="#3-alice-radio-uit-tijdens-verzenden-later-weer-aan">3. Alice' radio uit tijdens verzenden, later weer aan</a></li><li><a href="#4-bob-gaat-offline-na-verzenden-vóór-ack_s">4. Bob gaat offline na verzenden, vóór ACK_S</a></li><li><a href="#5-radios-nooit-tegelijk-bereikbaar-t_radio-verloopt">5. Radio's nooit tegelijk bereikbaar: T_radio verloopt</a></li><li><a href="#6-alice-verliest-opgeslagen-berichten-vóór-app-sync">6. Alice verliest opgeslagen berichten vóór app-sync</a></li></ol></li><li><a href="#met-mailbox">Met mailbox</a><ol><li><a href="#7-alice-offline-bob-deponeert-bob-offline-alice-haalt-op">7. Alice offline, Bob deponeert, Bob offline, Alice haalt op</a></li><li><a href="#8-alice-haalt-op-radio-verliest-berichten-vóór-telefoon-sync-resync">8. Alice haalt op, radio verliest berichten vóór telefoon-sync: RESYNC</a></li><li><a href="#9-mailbox-onbereikbaar-of-achterhaald-terwijl-alice-direct-bereikbaar-is">9. Mailbox onbereikbaar of achterhaald terwijl Alice direct bereikbaar is</a></li><li><a href="#10-alice-op-standaard-firmware-graceful-fallback">10. Alice op standaard-firmware: graceful fallback</a></li></ol></li><li><a href="#overzicht-gaten-in-het-ontwerp">Overzicht gaten in het ontwerp</a></li></ol>
+</nav>
+<main>
+<h1>05: Sequenties van DM's tussen Bob en Alice</h1>
+
+<p>Sequence diagrams van het ontwerp in <code>03-ontwerp.md</code> en <code>adr-001-reliable-dm.md</code>, inclusief de beslissingen van 29 sep 2026 en de verwerkte review (<code>04-review.md</code>). Berichtnamen, statussen, timers en velden komen uit <code>03</code>. Waar het ontwerp iets niet vastlegt dat nodig is om een scenario te tekenen, staat dat onder het diagram als "Gat in ontwerp"; alle gaten staan ook samen in de laatste paragraaf.</p>
+<p>Bob is steeds de afzender, Alice de ontvanger, M de mailbox. Beide draaien de fork, behalve in scenario 10.</p>
+<h2 id="legenda">Legenda</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>notatie</th>
+<th>betekenis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>A-&gt;&gt;B: X</code></td>
+<td>pakket, commando of seriële regel die aankomt</td>
+</tr>
+<tr>
+<td><code>A--&gt;&gt;B: X</code></td>
+<td>antwoord, ACK of push naar een app</td>
+</tr>
+<tr>
+<td><code>A-xB: X</code></td>
+<td>pakket dat verloren gaat (ontvanger uit of buiten bereik)</td>
+</tr>
+<tr>
+<td>grijs blok</td>
+<td>periode waarin de deelnemer uit de eerste Note offline is</td>
+</tr>
+<tr>
+<td><code>Note ... : offline</code> / <code>weer online</code></td>
+<td>begin en eind van een offline-periode als blokken elkaar overlappen</td>
+</tr>
+<tr>
+<td><code>Bob: STATE</code></td>
+<td>toestand van Bobs outbox-entry (<code>03</code> par. 4)</td>
+</tr>
+<tr>
+<td><code>0x91 STATE</code></td>
+<td><code>PUSH_CODE_RDM_STATUS</code> (0x91) met die state; alleen naar een client die <code>CMD_RDM_ENABLE</code> stuurde</td>
+</tr>
+<tr>
+<td><code>PUSH_CODE_SEND_CONFIRMED</code></td>
+<td>het vinkje in de standaard app (beslissing 6: bij <code>ACK_R</code>)</td>
+</tr>
+<tr>
+<td><code>‹id›</code>, <code>‹b64›</code></td>
+<td>plaatshouder in een regel tussen radio en Pi; in <code>03</code> par. 7 geschreven als <code>&lt;id&gt;</code></td>
+</tr>
+<tr>
+<td>+1 u, +30 min</td>
+<td>tijd sinds het vorige ijkpunt in het diagram</td>
+</tr>
+</tbody>
+</table></div>
+<p>"Bob-app" staat voor beide soorten client: de standaard app ziet alleen <code>RESP_CODE_SENT</code> en <code>PUSH_CODE_SEND_CONFIRMED</code>, een eigen client na <code>CMD_RDM_ENABLE</code> ook 0x91.</p>
+<p>De deelnemer "Mesh" is het pad over repeaters. Een pijl <code>Bob-radio -&gt; Mesh -&gt; Alice-radio</code> is één logisch pakket, direct over <code>out_path</code> of via flood.</p>
+<p>Statussen bij Bob:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>outbox-state (<code>03</code> par. 4)</th>
+<th>voor de gebruiker</th>
+<th>0x91</th>
+<th>standaard app</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NEW, WAIT_ACK, RETRY, DEPOSITING, REGISTER</td>
+<td>onderweg</td>
+<td>QUEUED (aanname, gat G1)</td>
+<td>verzonden, na eigen retries "failed"</td>
+</tr>
+<tr>
+<td>CUSTODY</td>
+<td>in bewaring</td>
+<td>CUSTODY</td>
+<td>geen vinkje</td>
+</tr>
+<tr>
+<td>ON_RADIO</td>
+<td>op Alice' radio</td>
+<td>ON_RADIO</td>
+<td>vinkje</td>
+</tr>
+<tr>
+<td>ON_RADIO_FINAL</td>
+<td>op Alice' radio (maximum bij standaard Alice)</td>
+<td>ON_RADIO_FINAL</td>
+<td>vinkje</td>
+</tr>
+<tr>
+<td>DELIVERED</td>
+<td>afgeleverd (Alice' telefoon)</td>
+<td>DELIVERED</td>
+<td>vinkje (geen verschil met ON_RADIO)</td>
+</tr>
+<tr>
+<td>EXPIRED</td>
+<td>verlopen (T_radio)</td>
+<td>EXPIRED</td>
+<td>"failed"</td>
+</tr>
+<tr>
+<td>SYNC_EXPIRED</td>
+<td>niet gesynct (T_sync)</td>
+<td>SYNC_EXPIRED</td>
+<td>vinkje</td>
+</tr>
+<tr>
+<td>REJECTED</td>
+<td>geweigerd (Alice kent Bob niet)</td>
+<td>REJECTED</td>
+<td>geen vinkje</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="overzicht">Overzicht</h2>
+<p>Zendtijd per hop komt uit <code>03</code> par. 5 (SF8, BW 62,5 kHz, preamble 32). "Afgeleid" betekent: opgeteld uit de pakketwaarden van <code>03</code> par. 5 (DM van 157 tekens 1,72 s, <code>ACK_R</code> of <code>ACK_S</code> 0,28 s, <code>RECEIPT_QUERY</code> of STATUS plus antwoord 0,82 s, zonder antwoord 0,41 s); <code>03</code> rekent dat scenario zelf niet door.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>scenario</th>
+<th>wie wanneer offline</th>
+<th>uitkomst bij Bob</th>
+<th>zendtijd per hop</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>basis</td>
+<td>niemand</td>
+<td>DELIVERED, vinkje bij <code>ACK_R</code></td>
+<td>2,3 s (afgeleid)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Alice' telefoon weg</td>
+<td>Alice-app tot na <code>ACK_R</code></td>
+<td>ON_RADIO, bij sync DELIVERED via <code>ACK_S</code> of <code>RECEIPT_QUERY</code></td>
+<td>4,7 s (<code>03</code>, telefoon een dag weg)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Alice' radio uit bij verzenden</td>
+<td>Alice-radio vanaf vóór het verzenden</td>
+<td>RETRY met probes, daarna ON_RADIO en DELIVERED</td>
+<td>3,4 s + 0,41 s per onbeantwoorde probe + 3,1 s (afgeleid)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Bob weg vóór <code>ACK_S</code></td>
+<td>Bob-radio en -app na <code>ACK_R</code>, Alice-app tot na Bobs vertrek</td>
+<td><code>ACK_S</code> verloren, na terugkeer DELIVERED via <code>RECEIPT_QUERY</code></td>
+<td>3,1 s (afgeleid)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>nooit tegelijk bereikbaar</td>
+<td>Bob en Alice afwisselend</td>
+<td>EXPIRED na T_radio (7 d)</td>
+<td>~51 s over 7 dagen (afgeleid, alleen probes)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Alice verliest inbox vóór sync</td>
+<td>Alice-app, en inbox en register van Alice-radio</td>
+<td><code>RECEIPT_QUERY</code> UNKNOWN, opnieuw verstuurd, DELIVERED, één keer getoond</td>
+<td>5,1 s (afgeleid)</td>
+</tr>
+<tr>
+<td>7</td>
+<td>mailbox, beide afwisselend weg</td>
+<td>Alice-radio bij verzenden, daarna Bob, Alice-app tot na ophalen</td>
+<td>CUSTODY, na terugkeer DELIVERED via STATUS</td>
+<td>7,9 s (<code>03</code>, mailboxbericht)</td>
+</tr>
+<tr>
+<td>8</td>
+<td>mailbox, Alice verliest inbox vóór sync</td>
+<td>Alice-app, inbox en register van Alice-radio, Bob tijdelijk</td>
+<td>ON_RADIO, RESYNC en heraflevering, DELIVERED</td>
+<td>7,9 s + ~3,1 s (afgeleid)</td>
+</tr>
+<tr>
+<td>9a</td>
+<td>mailbox onbereikbaar bij DEPOSIT</td>
+<td>Mailbox-Pi, Alice-radio tijdelijk</td>
+<td>NO_STORAGE, RETRY, probe levert direct af</td>
+<td>7,1 s + 0,41 s per onbeantwoorde probe (afgeleid)</td>
+</tr>
+<tr>
+<td>9b</td>
+<td>mailbox achterhaald, Alice bereikbaar</td>
+<td>Alice haalt niet (meer) op bij M</td>
+<td>CUSTODY, probe en directe DM, ON_RADIO, DELIVERED</td>
+<td>5,4 s + 0,82 s per STATUS-ronde (afgeleid)</td>
+</tr>
+<tr>
+<td>10</td>
+<td>Alice op standaard-firmware</td>
+<td>niemand (alt: Alice-radio)</td>
+<td>ON_RADIO_FINAL (maximum)</td>
+<td>2,0 s (afgeleid)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="zonder-mailbox">Zonder mailbox</h2>
+<h3 id="1-basis-beide-radios-en-apps-online">1. Basis: beide radio's en apps online</h3>
+<p>Bob en Alice draaien de fork en Bob heeft een pad naar Alice. Bobs radio maakt een outbox-entry en stuurt de DM met cap-trailer. Alice' radio slaat het bericht persistent op en ACKt pas dan met <code>ACK_R</code> plus cap-byte. Zodra haar app het bericht gesynct heeft, stuurt ze <code>ACK_S</code>.</p>
+<figure class="diagram" id="diagram-1"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant AR as Alice-radio
+    participant AA as Alice-app
+    BA-&gt;&gt;BR: CMD_SEND_TXT_MSG (timestamp, attempt 0, tekst)
+    Note over BR: outbox-entry (contact, timestamp, K)&lt;br/&gt;Bob: NEW
+    BR--&gt;&gt;BA: RESP_CODE_SENT (app_ack = ACK_R van attempt 0)
+    BR--&gt;&gt;BA: 0x91 QUEUED
+    BR-&gt;&gt;MS: TXT_MSG direct, tekst + 0x00 | attempt | 0x81
+    Note over BR: Bob: WAIT_ACK
+    MS-&gt;&gt;AR: TXT_MSG
+    Note over AR: ontsleuteld, register nieuw (sender + K)&lt;br/&gt;inbox persistent opgeslagen
+    AR-&gt;&gt;MS: ACK-pakket ACK_R + 0x81 (7 bytes)
+    MS-&gt;&gt;BR: ACK_R + 0x81
+    Note over BR: ACK_R met cap: Bob: ON_RADIO (op Alice' radio)&lt;br/&gt;cap van Alice persistent per contact
+    BR--&gt;&gt;BA: PUSH_CODE_SEND_CONFIRMED (app_ack): vinkje
+    BR--&gt;&gt;BA: 0x91 ON_RADIO
+    AR--&gt;&gt;AA: PUSH_CODE_MSG_WAITING
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE
+    AR--&gt;&gt;AA: RESP_CODE_CONTACT_MSG_RECV_V3 (bericht)
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE
+    Note over AR: volgend CMD_SYNC_NEXT_MESSAGE op dezelfde verbinding:&lt;br/&gt;register SYNCED, inbox-record vrijgegeven
+    AR--&gt;&gt;AA: RESP_CODE_NO_MORE_MESSAGES
+    AR-&gt;&gt;MS: ACK-pakket ACK_S (6 bytes, Bob heeft cap)
+    MS-&gt;&gt;BR: ACK_S
+    Note over BR: ACK_S klopt: Bob: DELIVERED (afgeleverd)
+    BR--&gt;&gt;BA: 0x91 DELIVERED
+</pre></figure>
+<p><strong>Uitkomst</strong>: DELIVERED. De standaard app toont het vinkje bij <code>ACK_R</code> en ziet <code>ACK_S</code> niet; een client met <code>CMD_RDM_ENABLE</code> ziet QUEUED, ON_RADIO, DELIVERED. Zonder pad gaat de DM via flood en komt <code>ACK_R</code> + <code>0x81</code> terug als PATH-extra; dat PATH zet Bobs <code>out_path</code>. Zendtijd 1,72 + 0,28 + 0,28 = 2,3 s per hop (afgeleid).</p>
+<p class="gap-title"><strong>Gat in ontwerp</strong></p>
+<ul class="gaps">
+<li><strong>G1</strong> <code>03</code> noemt de 0x91-states (QUEUED, CUSTODY, ...) en de outbox-states (NEW, WAIT_ACK, RETRY, DEPOSITING, REGISTER, ...), maar niet hoe die op elkaar afbeelden en wanneer de eerste 0x91 gaat. Hier aangenomen: QUEUED zodra de entry bestaat, zolang er geen CUSTODY of ON_RADIO is.</li>
+<li><strong>G2</strong> Niet vastgelegd wanneer een outbox-entry vrijkomt (na DELIVERED, ON_RADIO_FINAL, EXPIRED, REJECTED; SYNC_EXPIRED verhuist naar receipt-watch). Met 8 of 16 plekken en de vlag <code>unreported</code> bepaalt dat wanneer NO_OUTBOX optreedt.</li>
+</ul>
+<h3 id="2-alice-telefoon-offline-radio-aan">2. Alice' telefoon offline, radio aan</h3>
+<p>Alice' radio ontvangt en ACKt direct met <code>ACK_R</code>, want het bericht staat persistent in haar inbox. <code>ACK_S</code> volgt pas als haar app synct. Bob vraagt in ON_RADIO met <code>RECEIPT_QUERY</code> na 1 u, 4 u en 12 u; is hij online op het moment van de sync, dan komt <code>ACK_S</code> als los ACK-pakket binnen, anders bij de volgende query.</p>
+<figure class="diagram" id="diagram-2"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant AR as Alice-radio
+    participant AA as Alice-app
+    rect rgba(127,127,127,0.15)
+    Note over AA: Alice-app offline (radio aan)
+    BA-&gt;&gt;BR: CMD_SEND_TXT_MSG (timestamp, attempt 0, tekst)
+    BR--&gt;&gt;BA: RESP_CODE_SENT (app_ack)
+    BR--&gt;&gt;BA: 0x91 QUEUED
+    BR-&gt;&gt;MS: TXT_MSG + cap-trailer
+    MS-&gt;&gt;AR: TXT_MSG
+    Note over AR: register nieuw, inbox persistent
+    AR-&gt;&gt;MS: ACK_R + 0x81
+    MS-&gt;&gt;BR: ACK_R + 0x81
+    Note over BR: Bob: ON_RADIO
+    BR--&gt;&gt;BA: PUSH_CODE_SEND_CONFIRMED (app_ack): vinkje
+    BR--&gt;&gt;BA: 0x91 ON_RADIO
+    loop +1 u, +4 u, +12 u, daarna elke 24 u, plus bij horen van Alice (min 1 u)
+        BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+        MS-&gt;&gt;AR: RECEIPT_QUERY
+        AR-&gt;&gt;MS: RESPONSE n=1, state 1 ON_RADIO
+        MS-&gt;&gt;BR: RESPONSE
+        Note over BR: blijft ON_RADIO
+    end
+    end
+    Note over AA: Alice-app verbindt
+    AR--&gt;&gt;AA: PUSH_CODE_MSG_WAITING
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE
+    AR--&gt;&gt;AA: RESP_CODE_CONTACT_MSG_RECV_V3
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE
+    Note over AR: register SYNCED
+    AR--&gt;&gt;AA: RESP_CODE_NO_MORE_MESSAGES
+    alt Bob online, ACK_S komt aan
+        AR-&gt;&gt;MS: ACK-pakket ACK_S (6 bytes)
+        MS-&gt;&gt;BR: ACK_S
+        Note over BR: Bob: DELIVERED
+    else ACK_S gaat onderweg verloren
+        AR-&gt;&gt;MS: ACK-pakket ACK_S
+        MS-xBR: ACK_S
+        Note over BR: blijft ON_RADIO tot de volgende query
+        BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+        MS-&gt;&gt;AR: RECEIPT_QUERY
+        AR-&gt;&gt;MS: RESPONSE n=1, state 2 SYNCED + ACK_S
+        MS-&gt;&gt;BR: RESPONSE
+        Note over BR: ACK_S klopt: Bob: DELIVERED
+    end
+    BR--&gt;&gt;BA: 0x91 DELIVERED
+</pre></figure>
+<p><strong>Uitkomst</strong>: ON_RADIO zodra Alice' radio het heeft (vinkje in de standaard app), DELIVERED na de sync. <code>ACK_S</code> wordt één keer los verzonden en niet herhaald; <code>RECEIPT_QUERY</code> vangt verlies op. Opent Alice haar app niet binnen T_sync (30 dagen), dan wordt het SYNC_EXPIRED en gaat <code>ACK_S</code> 90 dagen in receipt-watch. Zendtijd 4,7 s per hop (<code>03</code>: DM, <code>ACK_R</code>, 3 queries met antwoord, <code>ACK_S</code>). Open punt uit <code>03</code> par. 9: of de standaard app doorsynct tot <code>RESP_CODE_NO_MORE_MESSAGES</code>; zo niet, dan telt het laatste bericht pas bij de volgende verbinding als gesynct.</p>
+<p><strong>Gat in ontwerp</strong>: geen.</p>
+<h3 id="3-alice-radio-uit-tijdens-verzenden-later-weer-aan">3. Alice' radio uit tijdens verzenden, later weer aan</h3>
+<p>Alice' radio is uit, dus de DM en de app-retry komen niet aan en de standaard app toont "failed". De outbox gaat door zonder app: omdat Bob Alice' cap kent uit eerder verkeer, probet hij met een kleine <code>RECEIPT_QUERY</code>. Het eerste antwoord UNKNOWN betekent dat Alice bereikbaar is en het bericht niet heeft; Bob stuurt de DM dan meteen over het pad uit het antwoord.</p>
+<figure class="diagram" id="diagram-3"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant AR as Alice-radio
+    participant AA as Alice-app
+    rect rgba(127,127,127,0.15)
+    Note over AR,AA: Alice-radio uit
+    BA-&gt;&gt;BR: CMD_SEND_TXT_MSG (timestamp, attempt 0, tekst)
+    BR--&gt;&gt;BA: RESP_CODE_SENT (app_ack = ACK_R attempt 0)
+    BR--&gt;&gt;BA: 0x91 QUEUED
+    BR-&gt;&gt;MS: TXT_MSG + cap-trailer
+    MS-xAR: TXT_MSG
+    Note over BR: WAIT_ACK, timeout, geen mailbox: Bob: RETRY
+    BA-&gt;&gt;BR: CMD_SEND_TXT_MSG (zelfde timestamp en tekst, attempt 1)
+    Note over BR: zelfde entry (contact, timestamp, K)&lt;br/&gt;app_ack = ACK_R van attempt 1
+    BR--&gt;&gt;BA: RESP_CODE_SENT (app_ack)
+    BR-&gt;&gt;MS: TXT_MSG attempt 1
+    MS-xAR: TXT_MSG
+    Note over BA: standaard app: na eigen retries failed
+    loop elke 30 min het eerste etmaal, daarna elke 2 u, na 2 mislukte direct-pogingen flood (hooguit elke 4 u)
+        BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+        MS-xAR: RECEIPT_QUERY
+    end
+    end
+    Note over AR,AA: Alice-radio en -app weer aan
+    BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+    MS-&gt;&gt;AR: RECEIPT_QUERY
+    Note over AR: sleutel onbekend, timestamp boven watermerk
+    AR-&gt;&gt;MS: RESPONSE n=1, state 0 UNKNOWN
+    MS-&gt;&gt;BR: RESPONSE
+    Note over BR: RETRY naar WAIT_ACK, DM meteen over pad uit antwoord&lt;br/&gt;(max 1 outbox-zending per 60 s, bij lege TX-queue)
+    BR-&gt;&gt;MS: TXT_MSG firmware-attempt 252 + c, cap-trailer
+    MS-&gt;&gt;AR: TXT_MSG
+    Note over AR: register nieuw, inbox persistent
+    AR-&gt;&gt;MS: ACK_R + 0x81
+    MS-&gt;&gt;BR: ACK_R + 0x81
+    Note over BR: ACK_R van klasse c matcht: Bob: ON_RADIO
+    BR--&gt;&gt;BA: PUSH_CODE_SEND_CONFIRMED (app_ack): vinkje, laat
+    BR--&gt;&gt;BA: 0x91 ON_RADIO
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE (2x, zoals scenario 1)
+    Note over AR: register SYNCED
+    AR-&gt;&gt;MS: ACK_S
+    MS-&gt;&gt;BR: ACK_S
+    Note over BR: Bob: DELIVERED
+    BR--&gt;&gt;BA: 0x91 DELIVERED
+</pre></figure>
+<p><strong>Uitkomst</strong>: afgeleverd binnen één probe-interval nadat Alice' radio aan gaat (R6). De standaard app toonde al "failed"; of de late <code>PUSH_CODE_SEND_CONFIRMED</code> dat nog in een vinkje verandert is open punt 2 uit <code>03</code> par. 9. Is Alice' cap onbekend, dan zijn het hele DM's met backoff (5 min, 15 min, 1 u, 4 u, 12 u, daarna elke 24 u) en komt de aflevering bij de eerste DM na het aangaan. Zendtijd (afgeleid): 2 × 1,72 voor de mislukte DM's, 0,41 per onbeantwoorde probe, daarna 0,82 + 1,72 + 0,28 + 0,28.</p>
+<p class="gap-title"><strong>Gat in ontwerp</strong></p>
+<ul class="gaps">
+<li><strong>G3</strong> De firmware-timeout van WAIT_ACK is niet gekwantificeerd (de bestaande <code>est_timeout</code> of iets eigens).</li>
+<li><strong>G4</strong> Een probe-antwoord ON_RADIO of SYNCED in WAIT_ACK of RETRY heeft geen overgang: de toestandsmachine noemt alleen UNKNOWN en EVICTED. Dat gebeurt als de DM wel aankwam maar <code>ACK_R</code> onderweg verloren ging; Bob blijft dan proben tot T_radio en eindigt op EXPIRED voor een bericht dat Alice heeft.</li>
+</ul>
+<h3 id="4-bob-gaat-offline-na-verzenden-vóór-ack_s">4. Bob gaat offline na verzenden, vóór <code>ACK_S</code></h3>
+<p>Bob heeft <code>ACK_R</code> al (ON_RADIO) en zet zijn radio uit; de outbox staat in flash. Alice synct terwijl Bob weg is, dus haar enige <code>ACK_S</code>-pakket gaat verloren. Na zijn terugkeer berekent Bob <code>ACK_R</code> en <code>ACK_S</code> opnieuw uit de opgeslagen tekst en vraagt met <code>RECEIPT_QUERY</code>.</p>
+<figure class="diagram" id="diagram-4"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant AR as Alice-radio
+    participant AA as Alice-app
+    Note over AA: Alice-app offline
+    BA-&gt;&gt;BR: CMD_SEND_TXT_MSG (timestamp, attempt 0, tekst)
+    BR--&gt;&gt;BA: RESP_CODE_SENT (app_ack)
+    BR-&gt;&gt;MS: TXT_MSG + cap-trailer
+    MS-&gt;&gt;AR: TXT_MSG
+    Note over AR: register nieuw, inbox persistent
+    AR-&gt;&gt;MS: ACK_R + 0x81
+    MS-&gt;&gt;BR: ACK_R + 0x81
+    Note over BR: Bob: ON_RADIO
+    BR--&gt;&gt;BA: PUSH_CODE_SEND_CONFIRMED (app_ack): vinkje
+    BR--&gt;&gt;BA: 0x91 ON_RADIO
+    rect rgba(127,127,127,0.15)
+    Note over BA,BR: Bob-radio en -app offline, outbox in flash
+    Note over AA: Alice-app verbindt
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE (2x)
+    Note over AR: register SYNCED
+    AR-&gt;&gt;MS: ACK-pakket ACK_S
+    MS-xBR: ACK_S (Bob uit, geen herhaling)
+    end
+    Note over BR: boot: outbox uit flash&lt;br/&gt;ACK_R (4 klassen) en ACK_S opnieuw berekend in RAM&lt;br/&gt;Bob: ON_RADIO
+    Note over BR: volgende RECEIPT_QUERY volgens schema (1 u, 4 u, 12 u, 24 u)&lt;br/&gt;of bij horen van Alice (min 1 u)
+    BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K), REQ-timestamp max(nu, laatste + 1)
+    MS-&gt;&gt;AR: RECEIPT_QUERY
+    alt register kent het bericht
+        AR-&gt;&gt;MS: RESPONSE n=1, state 2 SYNCED + ACK_S
+        MS-&gt;&gt;BR: RESPONSE
+        Note over BR: ACK_S klopt: Bob: DELIVERED
+    else entry opgeruimd, timestamp onder watermerk
+        AR-&gt;&gt;MS: RESPONSE n=1, state 3 EVICTED
+        MS-&gt;&gt;BR: RESPONSE
+        Note over BR: EVICTED in ON_RADIO: Bob: DELIVERED
+    end
+    BA-&gt;&gt;BR: CMD_RDM_ENABLE (app verbindt weer)
+    BR--&gt;&gt;BA: 0x91 DELIVERED (was unreported)
+</pre></figure>
+<p><strong>Uitkomst</strong>: DELIVERED, vertraagd tot de eerstvolgende query na Bobs terugkeer. EVICTED is hier gelijk aan DELIVERED, omdat Alice ongesyncte entries nooit opruimt en het antwoord versleuteld van haar komt. Zendtijd 1,72 + 0,28 + 0,28 + 0,82 = 3,1 s per hop (afgeleid), plus 0,41 s per query die Alice niet bereikt.</p>
+<p class="gap-title"><strong>Gat in ontwerp</strong></p>
+<ul class="gaps">
+<li><strong>G5</strong> Hoe statussen met vlag <code>unreported</code> bij de app komen als die terugkomt: 0x91 na <code>CMD_RDM_ENABLE</code>, via <code>CMD_RDM_LIST_OUTBOX</code>, of beide? En krijgt de standaard app alsnog <code>PUSH_CODE_SEND_CONFIRMED</code> als ze bij <code>ACK_R</code> niet verbonden was?</li>
+<li><strong>G6</strong> Timers na een reboot zonder RTC. <code>03</code> persisteert alleen de REQ-timestamp; de klok staat na een boot zonder app stil op <code>lastmod + 1</code> (K2). Hoe T_radio, T_sync en de query- en probe-schema's dan doorlopen, en of Bob na een boot meteen een query doet, staat niet in <code>03</code> (de review stelde "timers relatief opslaan" voor, dat is niet overgenomen).</li>
+</ul>
+<h3 id="5-radios-nooit-tegelijk-bereikbaar-t_radio-verloopt">5. Radio's nooit tegelijk bereikbaar: T_radio verloopt</h3>
+<p>Bob en Alice staan om beurten aan en overlappen nooit. Bobs probes bereiken Alice niet, en als Alice aan staat is Bob uit; Alice' companion zendt uit zichzelf niets. Na T_radio (7 dagen) geeft Bob het op. Dit is de fysieke grens zonder mailbox.</p>
+<figure class="diagram" id="diagram-5"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant AR as Alice-radio
+    participant AA as Alice-app
+    BA-&gt;&gt;BR: CMD_SEND_TXT_MSG (timestamp, attempt 0, tekst)
+    BR--&gt;&gt;BA: RESP_CODE_SENT (app_ack)
+    BR--&gt;&gt;BA: 0x91 QUEUED
+    rect rgba(127,127,127,0.15)
+    Note over AR,AA: Alice-radio uit
+    BR-&gt;&gt;MS: TXT_MSG + cap-trailer
+    MS-xAR: TXT_MSG
+    Note over BR: WAIT_ACK, timeout: Bob: RETRY
+    Note over BA: standaard app: failed na eigen retries
+    loop elke 30 min (eerste etmaal), daarna elke 2 u
+        BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+        MS-xAR: RECEIPT_QUERY
+    end
+    end
+    rect rgba(127,127,127,0.15)
+    Note over BA,BR: Bob-radio uit, outbox in flash
+    Note over AR: Alice-radio aan, zendt niets naar Bob
+    end
+    rect rgba(127,127,127,0.15)
+    Note over AR,AA: Alice-radio weer uit
+    loop probes volgens schema
+        BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+        MS-xAR: RECEIPT_QUERY
+    end
+    end
+    Note over BR: T_radio (7 dagen) verlopen: Bob: EXPIRED (verlopen)
+    BR--&gt;&gt;BA: 0x91 EXPIRED
+    Note over BA: standaard app: blijft failed
+</pre></figure>
+<p><strong>Uitkomst</strong>: EXPIRED. Het bericht heeft Alice nooit bereikt en niemand bewaart het. Zendtijd (afgeleid): 1,72 s voor de DM plus 120 onbeantwoorde probes (48 op dag 1, 72 op dag 2-7) × 0,41 s = ~51 s per hop over 7 dagen als Bob continu aan staat, exclusief app-retries en flood-probes (die kosten zendtijd bij elke repeater in de scope). Met mailbox (scenario 7) wordt dit wel afgeleverd.</p>
+<p><strong>Gat in ontwerp</strong>: G2 (wanneer de EXPIRED-entry vrijkomt).</p>
+<h3 id="6-alice-verliest-opgeslagen-berichten-vóór-app-sync">6. Alice verliest opgeslagen berichten vóór app-sync</h3>
+<p>Een gewone reboot verliest niets: inbox en register zijn persistent en <code>ACK_R</code> gaat pas na de opslag. Verlies treedt op als het inbox- en registerbestand opnieuw worden aangemaakt (corrupt, of een update met een ander recordformaat) terwijl identiteit en contacten blijven. Bob staat dan op ON_RADIO voor een bericht dat weg is; zijn volgende <code>RECEIPT_QUERY</code> krijgt UNKNOWN en hij stuurt het opnieuw. Alice' app heeft het nooit gezien, dus er ontstaat geen duplicaat.</p>
+<figure class="diagram" id="diagram-6"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant AR as Alice-radio
+    participant AA as Alice-app
+    rect rgba(127,127,127,0.15)
+    Note over AA: Alice-app offline
+    BA-&gt;&gt;BR: CMD_SEND_TXT_MSG (timestamp, attempt 0, tekst)
+    BR--&gt;&gt;BA: RESP_CODE_SENT (app_ack)
+    BR-&gt;&gt;MS: TXT_MSG attempt 0, cap-trailer
+    MS-&gt;&gt;AR: TXT_MSG
+    Note over AR: register nieuw, inbox persistent
+    AR-&gt;&gt;MS: ACK_R + 0x81
+    MS-&gt;&gt;BR: ACK_R + 0x81
+    Note over BR: Bob: ON_RADIO
+    BR--&gt;&gt;BA: PUSH_CODE_SEND_CONFIRMED (app_ack): vinkje
+    BR--&gt;&gt;BA: 0x91 ON_RADIO
+    Note over AR: inbox- en registerbestand opnieuw aangemaakt&lt;br/&gt;identiteit en contacten intact, watermerk weg
+    Note over BR: +1 u
+    BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+    MS-&gt;&gt;AR: RECEIPT_QUERY
+    Note over AR: sleutel onbekend, geen watermerk: UNKNOWN
+    AR-&gt;&gt;MS: RESPONSE n=1, state 0 UNKNOWN
+    MS-&gt;&gt;BR: RESPONSE
+    Note over BR: ON_RADIO naar RETRY (Alice is het kwijt)&lt;br/&gt;DM meteen over pad uit antwoord: WAIT_ACK
+    BR--&gt;&gt;BA: 0x91 ? (G1), vinkje blijft staan
+    BR-&gt;&gt;MS: TXT_MSG firmware-attempt 252 + c, cap-trailer
+    MS-&gt;&gt;AR: TXT_MSG
+    Note over AR: register nieuw, inbox persistent
+    AR-&gt;&gt;MS: ACK_R + 0x81
+    MS-&gt;&gt;BR: ACK_R + 0x81
+    Note over BR: Bob: ON_RADIO
+    BR--&gt;&gt;BA: 0x91 ON_RADIO
+    end
+    Note over AA: Alice-app verbindt
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE (2x)
+    Note over AR: register SYNCED, bericht 1x getoond
+    AR-&gt;&gt;MS: ACK_S
+    MS-&gt;&gt;BR: ACK_S
+    Note over BR: Bob: DELIVERED
+    BR--&gt;&gt;BA: 0x91 DELIVERED
+</pre></figure>
+<p><strong>Uitkomst</strong>: DELIVERED, Alice ziet het bericht één keer. Tussen het verlies en de query staat Bob op "op Alice' radio" terwijl het er niet meer is; dat duurt hooguit tot de volgende query (1 u, 4 u, 12 u, 24 u). Zendtijd 1,72 + 0,28 + 0,82 + 1,72 + 0,28 + 0,28 = 5,1 s per hop (afgeleid).</p>
+<p class="gap-title"><strong>Gat in ontwerp</strong></p>
+<ul class="gaps">
+<li>G1: welke 0x91-state Bob stuurt bij de terugval van ON_RADIO naar RETRY. Het vinkje in de standaard app kan niet worden ingetrokken.</li>
+<li><strong>G7</strong> Gaat het verlies ná een sync waarvan <code>ACK_S</code> onderweg verloren ging, dan is ook het watermerk weg: <code>RECEIPT_QUERY</code> geeft UNKNOWN in plaats van EVICTED of SYNCED, Bob stuurt opnieuw, en Alice' app toont het bericht twee keer. <code>03</code> behandelt verlies van het register niet.</li>
+</ul>
+<h2 id="met-mailbox">Met mailbox</h2>
+<p>Vooraf in alle mailboxscenario's: Alice heeft met <code>CMD_RDM_SET_MAILBOX</code> haar mailbox ingesteld (mailbox pubkey, <code>K_owner</code>), Bob is favoriet bij Alice, en Alice stuurde Bob na zijn eerste fork-DM een MBX_INFO (TXT_MSG txt_type 8, sub <code>0x01</code>, mailbox pubkey, <code>token_B</code>), die Bob ACKte. M staat bij Bob en Alice in de verborgen peer-tabel.</p>
+<h3 id="7-alice-offline-bob-deponeert-bob-offline-alice-haalt-op">7. Alice offline, Bob deponeert, Bob offline, Alice haalt op</h3>
+<p>Alice' radio is uit, dus na de time-out deponeert Bob de DM bij M. Na de commit op de Pi staat Bob op CUSTODY en gaat offline. Alice haalt op bij M, rapporteert ON_RADIO en na haar sync SYNCED in haar volgende FETCH's. Bob komt terug en leest met STATUS bij M de <code>ACK_S</code> van Alice, die hij zelf controleert.</p>
+<figure class="diagram" id="diagram-7"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant MR as Mailbox-radio
+    participant MP as Mailbox-Pi (mbxd)
+    participant AR as Alice-radio
+    participant AA as Alice-app
+    Note over AR,AA: Alice-radio en -app offline
+    BA-&gt;&gt;BR: CMD_SEND_TXT_MSG (timestamp, attempt 0, tekst tot 152 bytes)
+    BR--&gt;&gt;BA: RESP_CODE_SENT (app_ack)
+    BR--&gt;&gt;BA: 0x91 QUEUED
+    BR-&gt;&gt;MS: TXT_MSG + cap-trailer
+    MS-xAR: TXT_MSG
+    Note over BR: WAIT_ACK, timeout, Alice heeft MBX, tekst ≤ 152:&lt;br/&gt;Bob: DEPOSITING
+    BR-&gt;&gt;MS: REQ DEPOSIT (owner_prefix, inner_len, inner payload)
+    Note over BR: inner payload = complete TXT_MSG-payload&lt;br/&gt;met eigen firmware-attempt en cap-trailer
+    MS-&gt;&gt;MR: REQ DEPOSIT
+    MR-&gt;&gt;MP: @MBX STORE ‹id› ‹owner4› ‹sender32hex› ‹hash8hex› ‹b64 payload›
+    opt Bob niet geautoriseerd (zie G9)
+        MP--&gt;&gt;MR: mbx.err ‹id› NOT_AUTH
+        MR-&gt;&gt;MS: RESPONSE status 0x10 NOT_AUTH
+        MS-&gt;&gt;BR: RESPONSE
+        Note over BR: Bob: REGISTER (max 1x)
+        BR-&gt;&gt;MS: ANON_REQ (timestamp, 0xFF, M, versie, owner_prefix, token_B)
+        MS-&gt;&gt;MR: ANON_REQ
+        MR-&gt;&gt;MP: @MBX REG ‹id› ‹sender32hex› ‹owner4› ‹token8hex›
+        Note over MP: controle token_B = HMAC-SHA256(K_owner, pubkey_Bob)[0:8]&lt;br/&gt;en denylist
+        MP--&gt;&gt;MR: mbx.acl ‹pub› ‹owner› (aanname, G9)
+        MR-&gt;&gt;MS: RESPONSE tag, status, ttl_dagen, quota, tijd_M
+        MS-&gt;&gt;BR: RESPONSE
+        Note over BR: Bob: DEPOSITING
+        BR-&gt;&gt;MS: REQ DEPOSIT (zelfde inner payload)
+        MS-&gt;&gt;MR: REQ DEPOSIT
+        MR-&gt;&gt;MP: @MBX STORE ‹id› ...
+    end
+    Note over MP: INSERT messages, COMMIT met synchronous=FULL&lt;br/&gt;M: STORED
+    MP--&gt;&gt;MR: mbx.ok ‹id›
+    MR-&gt;&gt;MS: RESPONSE status 0 STORED, pkt_hash, expires
+    MS-&gt;&gt;BR: RESPONSE
+    Note over BR: pkt_hash klopt: Bob: CUSTODY (in bewaring)
+    BR--&gt;&gt;BA: 0x91 CUSTODY
+    Note over BA: standaard app: geen vinkje (failed na eigen retries)
+    Note over BA,BR: Bob-radio en -app offline
+    Note over AR: Alice-radio aan, FETCH bij boot (+0-60 s jitter)
+    AR-&gt;&gt;MS: REQ FETCH via flood (flags 0, n=0)
+    MS-&gt;&gt;MR: REQ FETCH
+    MR-&gt;&gt;MS: PATH-return met RESPONSE zonder kopie (resterend 1)
+    MS-&gt;&gt;AR: PATH
+    Note over AR: pad naar M vastgelegd, resterend &gt; 0: direct opnieuw
+    AR-&gt;&gt;MS: REQ FETCH direct (flags 0, n=0)
+    MS-&gt;&gt;MR: REQ FETCH
+    MR-&gt;&gt;MP: @MBX FETCH ‹id› ‹owner4› ‹flags› ‹rapporten›
+    Note over MP: M: STORED naar SENT
+    MP--&gt;&gt;MR: mbx.fetch ‹id› ‹resterend 0› ‹ok› ‹b64›
+    MR-&gt;&gt;MS: RESPONSE tag, resterend 0, rapporten_ok 0, inner_len, inner payload
+    MS-&gt;&gt;AR: RESPONSE
+    Note over AR: inner payload via normaal ontsleutelpad&lt;br/&gt;register nieuw, inbox persistent&lt;br/&gt;geen ACK naar Bob, rapport ON_RADIO klaar
+    Note over AR: +60 min: volgende FETCH
+    AR-&gt;&gt;MS: REQ FETCH n=1 (pkt_hash, result 0 ON_RADIO, ack = ACK_R + 2 nullen)
+    MS-&gt;&gt;MR: REQ FETCH
+    MR-&gt;&gt;MP: @MBX FETCH ‹id› ‹owner4› ‹flags› ‹rapporten›
+    Note over MP: M: SENT naar ON_RADIO (ciphertext blijft)
+    MP--&gt;&gt;MR: mbx.fetch ‹id› ‹resterend 0› ‹ok›
+    MR-&gt;&gt;MS: RESPONSE resterend 0, rapporten_ok 1, zonder kopie
+    MS-&gt;&gt;AR: RESPONSE
+    Note over AA: Alice-app verbindt
+    AR--&gt;&gt;AA: PUSH_CODE_MSG_WAITING
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE
+    AR--&gt;&gt;AA: RESP_CODE_CONTACT_MSG_RECV_V3
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE
+    Note over AR: register SYNCED&lt;br/&gt;kopie van M: geen losse ACK_S, rapport SYNCED
+    AR--&gt;&gt;AA: RESP_CODE_NO_MORE_MESSAGES
+    AR-&gt;&gt;MS: REQ FETCH n=1 (pkt_hash, result 1 SYNCED, ack = ACK_S)
+    MS-&gt;&gt;MR: REQ FETCH
+    MR-&gt;&gt;MP: @MBX FETCH ‹id› ‹owner4› ‹flags› ‹rapporten›
+    Note over MP: M: ON_RADIO naar DELIVERED&lt;br/&gt;ciphertext gewist, ACK_S bewaard
+    MP--&gt;&gt;MR: mbx.fetch ‹id› ‹resterend 0› ‹ok›
+    MR-&gt;&gt;MS: RESPONSE rapporten_ok 1
+    MS-&gt;&gt;AR: RESPONSE
+    Note over BA,BR: Bob-radio weer aan
+    Note over BR: CUSTODY: STATUS naar M volgens schema&lt;br/&gt;(10 min, 30 min, 1 u, 4 u, daarna elke 12 u) of bij advert van M
+    BR-&gt;&gt;MS: REQ STATUS n=1 (pkt_hash)
+    MS-&gt;&gt;MR: REQ STATUS
+    MR-&gt;&gt;MP: @MBX STAT ‹id› ‹sender› ‹hash›
+    MP--&gt;&gt;MR: mbx.stat ‹id› ‹3:ACK_S›
+    MR-&gt;&gt;MS: RESPONSE n=1, state 3 DELIVERED, ack = ACK_S
+    MS-&gt;&gt;BR: RESPONSE
+    Note over BR: ACK_S zelf gecontroleerd: Bob: DELIVERED&lt;br/&gt;(overgang vanuit CUSTODY ontbreekt, G8)
+    BA-&gt;&gt;BR: CMD_RDM_ENABLE (app verbindt weer)
+    BR--&gt;&gt;BA: 0x91 DELIVERED (was unreported)
+    Note over BA: standaard app: vinkje niet gespecificeerd (G8)
+</pre></figure>
+<p><strong>Uitkomst</strong>: bij Bob CUSTODY, na terugkeer DELIVERED; M kan "afgeleverd" niet vervalsen, want Bob controleert <code>ACK_S</code> zelf. Zendtijd 7,9 s per hop (<code>03</code>: DEPOSIT, FETCH met kopie, FETCH ON_RADIO, FETCH SYNCED, 2× STATUS, elk met antwoord). Hier één STATUS minder, maar extra de mislukte eerste DM (1,72 s), de flood-FETCH met PATH-return en eventueel de registratie.</p>
+<p class="gap-title"><strong>Gat in ontwerp</strong></p>
+<ul class="gaps">
+<li><strong>G8</strong> CUSTODY heeft geen overgang voor STATUS DELIVERED met geldige <code>ACK_S</code>, en ook niet voor een <code>RECEIPT_QUERY</code>-antwoord ON_RADIO of SYNCED op een probe; de toestandsmachine gaat alleen via ON_RADIO naar DELIVERED. Precies dit scenario (Bob weg tot na de sync) slaat ON_RADIO over. Ook onbepaald: krijgt de standaard app <code>PUSH_CODE_SEND_CONFIRMED</code> als Bob alleen <code>ACK_S</code> ziet en nooit <code>ACK_R</code> (STATUS draagt één ack)?</li>
+<li><strong>G9</strong> Registratie: bij een cache-miss kan de mailboxradio Bobs REQ niet ontsleutelen en antwoordt niet; <code>03</code> par. 7 zegt dat Bob dan na een time-out opnieuw registreert, maar de toestandsmachine stuurt "geen antwoord" naar RETRY en gaat alleen bij NOT_AUTH naar REGISTER. Verder onbepaald: welke Pi-regel <code>@MBX REG</code> beantwoordt (<code>mbx.ok</code>, <code>mbx.acl</code> of beide) en welke waarden <code>status</code> in het registratieantwoord heeft.</li>
+<li><strong>G10</strong> Bobs T_radio is 7 dagen, de TTL op de Pi per owner tot 30 dagen (<code>ttl_dagen</code>, <code>expires</code>). Niet vastgelegd of Bob in CUSTODY <code>expires</code> overneemt. Verloopt Bob eerder dan M, dan staat de entry op EXPIRED en is er geen receipt-watch, dus een latere aflevering via M ziet Bob nooit.</li>
+<li>G5 (unreported na herverbinden).</li>
+</ul>
+<h3 id="8-alice-haalt-op-radio-verliest-berichten-vóór-telefoon-sync-resync">8. Alice haalt op, radio verliest berichten vóór telefoon-sync: RESYNC</h3>
+<p>Alice heeft de kopie opgehaald en ON_RADIO gerapporteerd; Bob heeft dat via STATUS gezien. Daarna verliest Alice' radio inbox en register (zoals in scenario 6) terwijl haar app nog niet synct. Haar eerstvolgende FETCH draagt de vlag RESYNC; M zet haar ON_RADIO-berichten terug op STORED en levert opnieuw af met een nieuwe tag.</p>
+<figure class="diagram" id="diagram-8"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant MR as Mailbox-radio
+    participant MP as Mailbox-Pi (mbxd)
+    participant AR as Alice-radio
+    participant AA as Alice-app
+    Note over AA: Alice-app offline
+    Note over BR: Bob: CUSTODY (zoals scenario 7)
+    AR-&gt;&gt;MS: REQ FETCH
+    MS-&gt;&gt;MR: REQ FETCH
+    MR-&gt;&gt;MP: @MBX FETCH ‹id› ‹owner4› ‹flags› ‹rapporten›
+    Note over MP: M: STORED naar SENT
+    MP--&gt;&gt;MR: mbx.fetch ‹id› ‹resterend 0› ‹ok› ‹b64›
+    MR-&gt;&gt;MS: RESPONSE tag 1, inner payload
+    MS-&gt;&gt;AR: RESPONSE
+    Note over AR: register nieuw, inbox persistent
+    AR-&gt;&gt;MS: REQ FETCH n=1 (result 0 ON_RADIO, ACK_R)
+    MS-&gt;&gt;MR: REQ FETCH
+    MR-&gt;&gt;MP: @MBX FETCH ‹id› ‹owner4› ‹flags› ‹rapporten›
+    Note over MP: M: SENT naar ON_RADIO
+    MP--&gt;&gt;MR: mbx.fetch ‹id› ‹resterend 0› ‹ok›
+    MR-&gt;&gt;MS: RESPONSE rapporten_ok 1
+    MS-&gt;&gt;AR: RESPONSE
+    BR-&gt;&gt;MS: REQ STATUS n=1 (pkt_hash)
+    MS-&gt;&gt;MR: REQ STATUS
+    MR-&gt;&gt;MP: @MBX STAT ‹id› ‹sender› ‹hash›
+    MP--&gt;&gt;MR: mbx.stat ‹id› ‹2:ACK_R›
+    MR-&gt;&gt;MS: RESPONSE n=1, state 2 ON_RADIO, ack = ACK_R
+    MS-&gt;&gt;BR: RESPONSE
+    Note over BR: geldige ACK_R: Bob: ON_RADIO
+    BR--&gt;&gt;BA: PUSH_CODE_SEND_CONFIRMED (app_ack): vinkje
+    BR--&gt;&gt;BA: 0x91 ON_RADIO
+    Note over BA,BR: Bob-radio en -app offline
+    Note over AR: inbox- en registerbestand opnieuw aangemaakt
+    Note over AR: boot: FETCH met RESYNC
+    AR-&gt;&gt;MS: REQ FETCH flags 0x01 RESYNC, n=0
+    MS-&gt;&gt;MR: REQ FETCH
+    MR-&gt;&gt;MP: @MBX FETCH ‹id› ‹owner4› ‹0x01› ‹rapporten›
+    Note over MP: alle ON_RADIO van deze owner naar STORED&lt;br/&gt;daarna STORED naar SENT
+    MP--&gt;&gt;MR: mbx.fetch ‹id› ‹resterend 0› ‹ok› ‹b64›
+    MR-&gt;&gt;MS: RESPONSE tag 2 (nieuwe hash), zelfde inner payload
+    MS-&gt;&gt;AR: RESPONSE
+    Note over AR: register nieuw, inbox persistent, rapport ON_RADIO
+    AR-&gt;&gt;MS: REQ FETCH n=1 (result 0 ON_RADIO, ACK_R)
+    MS-&gt;&gt;MR: REQ FETCH
+    MR-&gt;&gt;MP: @MBX FETCH ‹id› ‹owner4› ‹flags› ‹rapporten›
+    Note over MP: M: SENT naar ON_RADIO
+    MP--&gt;&gt;MR: mbx.fetch ‹id› ‹resterend 0› ‹ok›
+    MR-&gt;&gt;MS: RESPONSE rapporten_ok 1
+    MS-&gt;&gt;AR: RESPONSE
+    Note over AA: Alice-app verbindt
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE (2x)
+    Note over AR: register SYNCED, bericht 1x getoond
+    AR-&gt;&gt;MS: REQ FETCH n=1 (result 1 SYNCED, ACK_S)
+    MS-&gt;&gt;MR: REQ FETCH
+    MR-&gt;&gt;MP: @MBX FETCH ‹id› ‹owner4› ‹flags› ‹rapporten›
+    Note over MP: M: ON_RADIO naar DELIVERED, ciphertext gewist
+    MP--&gt;&gt;MR: mbx.fetch ‹id› ‹resterend 0› ‹ok›
+    MR-&gt;&gt;MS: RESPONSE rapporten_ok 1
+    MS-&gt;&gt;AR: RESPONSE
+    Note over BA,BR: Bob-radio weer aan
+    Note over BR: ON_RADIO: RECEIPT_QUERY volgens schema (G11)
+    BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+    MS-&gt;&gt;AR: RECEIPT_QUERY
+    AR-&gt;&gt;MS: RESPONSE n=1, state 2 SYNCED + ACK_S
+    MS-&gt;&gt;BR: RESPONSE
+    Note over BR: ACK_S klopt: Bob: DELIVERED
+    BA-&gt;&gt;BR: CMD_RDM_ENABLE
+    BR--&gt;&gt;BA: 0x91 DELIVERED
+</pre></figure>
+<p><strong>Uitkomst</strong>: DELIVERED, Alice ziet het bericht één keer; de ciphertext bleef bij M staan tot SYNCED, daardoor kan M opnieuw afleveren. Was Bob tijdens het verlies online geweest, dan had zijn <code>RECEIPT_QUERY</code> UNKNOWN gekregen en had hij ook zelf direct verstuurd; Alice' register vangt de tweede kopie dan als duplicaat (rapport DUPLICATE). Zendtijd: 7,9 s uit <code>03</code> plus ~3,1 s voor de heraflevering (FETCH met kopie 2,13 s, FETCH ON_RADIO 0,95 s; afgeleid).</p>
+<p class="gap-title"><strong>Gat in ontwerp</strong></p>
+<ul class="gaps">
+<li><strong>G11</strong> In ON_RADIO staat voor een bericht via M alleen <code>RECEIPT_QUERY</code> in het schema van <code>03</code> par. 5, geen STATUS naar M, terwijl de overgang "STATUS DELIVERED met geldige <code>ACK_S</code>" wel bestaat en de 7,9 s twee STATUS-rondes meetelt. Is Alice niet direct bereikbaar voor Bob (de reden voor de mailbox), dan ziet Bob "afgeleverd" niet via M.</li>
+<li><strong>G12</strong> RESYNC: <code>03</code> zegt niet hoe Alice' radio vaststelt dat haar inbox opnieuw geformatteerd is, en of RESYNC ook geldt als alleen het register weg is. Verder gaan met het register ook openstaande rapporten verloren: een SYNCED-rapport dat M nog niet met <code>rapporten_ok</code> bevestigde, laat M op ON_RADIO, RESYNC zet het terug op STORED, en Alice' app krijgt een al gesynct bericht opnieuw (duplicaat, vergelijk G7).</li>
+</ul>
+<h3 id="9-mailbox-onbereikbaar-of-achterhaald-terwijl-alice-direct-bereikbaar-is">9. Mailbox onbereikbaar of achterhaald terwijl Alice direct bereikbaar is</h3>
+<p>Review I4: de mailbox mag directe aflevering niet stilzetten. In 9a antwoordt de Pi niet op de DEPOSIT en valt Bob terug op probes naar Alice. In 9b bewaart M het bericht wel (CUSTODY), maar Alice haalt daar niet (meer) op, bijvoorbeeld omdat ze van mailbox wisselde of M achterhoudt; Bob probet Alice dan elke 24 u en levert direct af.</p>
+<p><strong>9a. Mailbox onbereikbaar bij DEPOSIT</strong></p>
+<figure class="diagram" id="diagram-9"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant MR as Mailbox-radio
+    participant MP as Mailbox-Pi (mbxd)
+    participant AR as Alice-radio
+    participant AA as Alice-app
+    Note over MP: Mailbox-Pi offline
+    Note over AR,AA: Alice-radio tijdelijk uit
+    BA-&gt;&gt;BR: CMD_SEND_TXT_MSG (timestamp, attempt 0, tekst)
+    BR--&gt;&gt;BA: RESP_CODE_SENT (app_ack)
+    BR--&gt;&gt;BA: 0x91 QUEUED
+    BR-&gt;&gt;MS: TXT_MSG + cap-trailer
+    MS-xAR: TXT_MSG
+    Note over BR: WAIT_ACK, timeout, Alice heeft MBX: Bob: DEPOSITING
+    BR-&gt;&gt;MS: REQ DEPOSIT (owner_prefix, inner_len, inner payload)
+    MS-&gt;&gt;MR: REQ DEPOSIT
+    MR-xMP: @MBX STORE ‹id› ...
+    Note over MR: geen mbx.ok binnen 3 s
+    MR-&gt;&gt;MS: RESPONSE status 0x13 NO_STORAGE
+    MS-&gt;&gt;BR: RESPONSE
+    Note over BR: Bob: RETRY (geen in bewaring)
+    loop elke 30 min het eerste etmaal, daarna elke 2 u
+        BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+        MS-xAR: RECEIPT_QUERY
+    end
+    Note over AR,AA: Alice-radio en -app weer aan
+    BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+    MS-&gt;&gt;AR: RECEIPT_QUERY
+    AR-&gt;&gt;MS: RESPONSE n=1, state 0 UNKNOWN
+    MS-&gt;&gt;BR: RESPONSE
+    Note over BR: DM meteen over pad uit antwoord: Bob: WAIT_ACK
+    BR-&gt;&gt;MS: TXT_MSG firmware-attempt, cap-trailer
+    MS-&gt;&gt;AR: TXT_MSG
+    Note over AR: register nieuw, inbox persistent
+    AR-&gt;&gt;MS: ACK_R + 0x81
+    MS-&gt;&gt;BR: ACK_R + 0x81
+    Note over BR: Bob: ON_RADIO
+    BR--&gt;&gt;BA: PUSH_CODE_SEND_CONFIRMED (app_ack): vinkje
+    BR--&gt;&gt;BA: 0x91 ON_RADIO
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE (2x)
+    AR-&gt;&gt;MS: ACK_S
+    MS-&gt;&gt;BR: ACK_S
+    Note over BR: Bob: DELIVERED
+    BR--&gt;&gt;BA: 0x91 DELIVERED
+</pre></figure>
+<p><strong>9b. Mailbox achterhaald: M bewaart, Alice haalt daar niet op</strong></p>
+<figure class="diagram" id="diagram-10"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant MR as Mailbox-radio
+    participant MP as Mailbox-Pi (mbxd)
+    participant AR as Alice-radio
+    participant AA as Alice-app
+    Note over BR: Bob: CUSTODY bij M (deposit zoals scenario 7)
+    Note over AR,AA: Alice-radio aan, haalt niet (meer) op bij deze M
+    loop STATUS naar M: 10 min, 30 min, 1 u, 4 u, daarna elke 12 u
+        BR-&gt;&gt;MS: REQ STATUS n=1 (pkt_hash)
+        MS-&gt;&gt;MR: REQ STATUS
+        MR-&gt;&gt;MP: @MBX STAT ‹id› ‹sender› ‹hash›
+        MP--&gt;&gt;MR: mbx.stat ‹id› ‹1›
+        MR-&gt;&gt;MS: RESPONSE n=1, state 1 STORED
+        MS-&gt;&gt;BR: RESPONSE
+        Note over BR: blijft CUSTODY
+    end
+    Note over BR: probe naar Alice: elke 24 u, of bij horen van Alice (min 1 u)
+    BR-&gt;&gt;MS: REQ RECEIPT_QUERY n=1 (timestamp, K)
+    MS-&gt;&gt;AR: RECEIPT_QUERY
+    AR-&gt;&gt;MS: RESPONSE n=1, state 0 UNKNOWN
+    MS-&gt;&gt;BR: RESPONSE
+    Note over BR: UNKNOWN in CUSTODY: directe DM, blijft CUSTODY (I4)
+    BR-&gt;&gt;MS: TXT_MSG firmware-attempt, cap-trailer
+    MS-&gt;&gt;AR: TXT_MSG
+    Note over AR: register nieuw, inbox persistent
+    AR-&gt;&gt;MS: ACK_R + 0x81
+    MS-&gt;&gt;BR: ACK_R + 0x81
+    Note over BR: ACK_R direct: Bob: ON_RADIO
+    BR--&gt;&gt;BA: PUSH_CODE_SEND_CONFIRMED (app_ack): vinkje
+    BR--&gt;&gt;BA: 0x91 ON_RADIO
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE (2x)
+    Note over AR: register SYNCED
+    AR-&gt;&gt;MS: ACK_S
+    MS-&gt;&gt;BR: ACK_S
+    Note over BR: Bob: DELIVERED
+    BR--&gt;&gt;BA: 0x91 DELIVERED
+    opt Alice haalt later toch op bij M
+        AR-&gt;&gt;MS: REQ FETCH
+        MS-&gt;&gt;MR: REQ FETCH
+        MR-&gt;&gt;MS: RESPONSE met dezelfde inner payload
+        MS-&gt;&gt;AR: RESPONSE
+        Note over AR: register kent sender + K: niet tonen&lt;br/&gt;rapport DUPLICATE in volgende FETCH
+    end
+    Note over MP: haalt niemand op: T_radio naar EXPIRED, na 30 d weg
+</pre></figure>
+<p><strong>Uitkomst</strong>: in beide gevallen DELIVERED zonder duplicaat. In 9a ziet Bob nooit "in bewaring"; in 9b wel, maar de aflevering loopt direct. Kost van de terugval: in 9b duurt het tot de volgende 24-uursprobe (of het horen van Alice) voordat Bob direct aflevert. Kent M het bericht niet meer (STATUS UNKNOWN), dan gaat Bob terug naar RETRY. Zendtijd (afgeleid): 9a 1,72 + 2,26 (DEPOSIT met antwoord) + 0,82 + 1,72 + 0,56 = 7,1 s plus 0,41 s per onbeantwoorde probe; 9b 2,26 + 0,82 + 1,72 + 0,56 = 5,4 s plus 0,82 s per STATUS-ronde (zonder de mislukte eerste DM).</p>
+<p class="gap-title"><strong>Gat in ontwerp</strong></p>
+<ul class="gaps">
+<li><strong>G13</strong> Na een mislukte DEPOSIT (geen antwoord, QUOTA, NO_STORAGE) staat Bob in RETRY, en RETRY gaat alleen naar WAIT_ACK bij een probe-antwoord of het horen van Alice. Blijft Alice onbereikbaar, dan deponeert Bob niet opnieuw als M weer werkt: geen "in bewaring" en in de praktijk scenario 5.</li>
+<li><strong>G14</strong> MBX_INFO en MBX_REVOKE: <code>03</code> zegt niet of Alice ze herhaalt als Bob niet ACKt, en niet wat Bob doet met entries in CUSTODY bij een mailbox die is ingetrokken of vervangen (opnieuw deponeren bij de nieuwe M, of alleen wachten op de 24-uursprobe).</li>
+</ul>
+<h3 id="10-alice-op-standaard-firmware-graceful-fallback">10. Alice op standaard-firmware: graceful fallback</h3>
+<p>Alice draait standaard firmware. Ze toont de tekst tot de NUL, zet het bericht in haar RAM-queue en ACKt direct met de bestaande ACK zonder cap-byte. Bob ziet dan ON_RADIO_FINAL: "op Alice' radio" is het maximum. Er komt geen <code>ACK_S</code>, geen <code>RECEIPT_QUERY</code> en geen MBX_INFO.</p>
+<figure class="diagram" id="diagram-11"><pre class="mermaid-src">sequenceDiagram
+    participant BA as Bob-app
+    participant BR as Bob-radio
+    participant MS as Mesh (repeaters)
+    participant AR as Alice-radio (standaard)
+    participant AA as Alice-app
+    BA-&gt;&gt;BR: CMD_SEND_TXT_MSG (timestamp, attempt 0, tekst)
+    Note over BR: Bob: NEW
+    BR--&gt;&gt;BA: RESP_CODE_SENT (app_ack)
+    BR--&gt;&gt;BA: 0x91 QUEUED
+    alt Alice-radio aan
+        BR-&gt;&gt;MS: TXT_MSG + 0x00 | attempt | 0x81
+        MS-&gt;&gt;AR: TXT_MSG
+        Note over AR: tekst tot NUL, RAM-queue&lt;br/&gt;ACK direct, zonder opslag
+        AR-&gt;&gt;MS: ACK-pakket (bestaande ACK, geen 0x81)
+        MS-&gt;&gt;BR: ACK_R zonder cap
+    else Alice-radio uit, cap onbekend
+        BR-&gt;&gt;MS: TXT_MSG + cap-trailer
+        MS-xAR: TXT_MSG
+        Note over BR: WAIT_ACK, timeout: Bob: RETRY
+        loop DM-backoff 5 min, 15 min, 1 u, 4 u, 12 u, daarna elke 24 u
+            BR-&gt;&gt;MS: TXT_MSG firmware-attempt, cap-trailer
+            MS-xAR: TXT_MSG
+        end
+        Note over AR: Alice-radio weer aan
+        BR-&gt;&gt;MS: TXT_MSG firmware-attempt, cap-trailer (volgende backoff-stap)
+        MS-&gt;&gt;AR: TXT_MSG
+        AR-&gt;&gt;MS: ACK-pakket (bestaande ACK, geen 0x81)
+        MS-&gt;&gt;BR: ACK_R zonder cap
+    end
+    Note over BR: ACK_R zonder cap: Bob: ON_RADIO_FINAL (klaar)
+    BR--&gt;&gt;BA: PUSH_CODE_SEND_CONFIRMED (app_ack): vinkje
+    BR--&gt;&gt;BA: 0x91 ON_RADIO_FINAL
+    AR--&gt;&gt;AA: PUSH_CODE_MSG_WAITING
+    AA-&gt;&gt;AR: CMD_SYNC_NEXT_MESSAGE
+    AR--&gt;&gt;AA: RESP_CODE_CONTACT_MSG_RECV_V3
+    Note over AR,BR: geen ACK_S, geen RECEIPT_QUERY, geen MBX_INFO
+</pre></figure>
+<p><strong>Uitkomst</strong>: ON_RADIO_FINAL, gelijk aan wat de standaard app nu "delivered" noemt; de outbox voegt alleen persistente retries toe. Wat Alice' standaard radio daarna doet valt buiten het ontwerp: RAM-queue vol (#3518) of een reboot verliest het bericht (L2, L3), en gaat een ACK verloren, dan toont Alice de volgende backoff-DM opnieuw (L6). Een mailbox is niet mogelijk, want alleen een fork-Alice stuurt MBX_INFO. Zendtijd 1,72 + 0,28 = 2,0 s per hop bij een directe ACK (afgeleid); met Alice uit 1,72 s per backoff-DM.</p>
+<p class="gap-title"><strong>Gat in ontwerp</strong></p>
+<ul class="gaps">
+<li><strong>G15</strong> Capability wordt nooit ingetrokken. Draaide Alice eerder de fork (cap bekend) en staat ze nu op standaard firmware, dan stuurt Bob in RETRY alleen <code>RECEIPT_QUERY</code>-probes; een standaard companion antwoordt niet op onbekende req_types, dus Bob stuurt geen DM meer en eindigt op EXPIRED terwijl Alice bereikbaar is (tenzij hij Alice toevallig hoort).</li>
+</ul>
+<h2 id="overzicht-gaten-in-het-ontwerp">Overzicht gaten in het ontwerp</h2>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>scenario</th>
+<th>gat</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>G1</td>
+<td>1, 6</td>
+<td>Afbeelding outbox-state naar 0x91-state niet vastgelegd, ook niet bij de terugval ON_RADIO naar RETRY.</td>
+</tr>
+<tr>
+<td>G2</td>
+<td>1, 5</td>
+<td>Wanneer een outbox-entry vrijkomt na een eindstatus.</td>
+</tr>
+<tr>
+<td>G3</td>
+<td>3</td>
+<td>Firmware-timeout van WAIT_ACK niet gekwantificeerd.</td>
+</tr>
+<tr>
+<td>G4</td>
+<td>3</td>
+<td>Probe-antwoord ON_RADIO of SYNCED in WAIT_ACK/RETRY (verloren <code>ACK_R</code>) heeft geen overgang.</td>
+</tr>
+<tr>
+<td>G5</td>
+<td>4, 7</td>
+<td>Aflevering van <code>unreported</code> statussen na herverbinden, voor 0x91 en voor <code>PUSH_CODE_SEND_CONFIRMED</code>.</td>
+</tr>
+<tr>
+<td>G6</td>
+<td>4</td>
+<td>Timers en schema's na een reboot zonder RTC; wel of geen query direct na boot.</td>
+</tr>
+<tr>
+<td>G7</td>
+<td>6</td>
+<td>Registerverlies na een sync met verloren <code>ACK_S</code>: UNKNOWN, herzending, duplicaat in Alice' app.</td>
+</tr>
+<tr>
+<td>G8</td>
+<td>7</td>
+<td>CUSTODY mist overgangen naar DELIVERED (STATUS DELIVERED) en naar ON_RADIO/DELIVERED op een probe-antwoord; vinkje als Bob nooit <code>ACK_R</code> ziet.</td>
+</tr>
+<tr>
+<td>G9</td>
+<td>7</td>
+<td>Registratie na cache-miss (par. 7 tegenover toestandsmachine), Pi-antwoord op <code>@MBX REG</code>, statuswaarden registratieantwoord.</td>
+</tr>
+<tr>
+<td>G10</td>
+<td>7</td>
+<td>T_radio van Bob tegenover <code>expires</code>/<code>ttl_dagen</code> van M; geen receipt-watch na EXPIRED.</td>
+</tr>
+<tr>
+<td>G11</td>
+<td>8</td>
+<td>Geen STATUS-schema in ON_RADIO voor berichten via M.</td>
+</tr>
+<tr>
+<td>G12</td>
+<td>8</td>
+<td>Detectie van RESYNC; verlies van openstaande SYNCED-rapporten geeft heraflevering en duplicaat.</td>
+</tr>
+<tr>
+<td>G13</td>
+<td>9a</td>
+<td>Geen weg terug van RETRY naar DEPOSITING na een mislukte DEPOSIT.</td>
+</tr>
+<tr>
+<td>G14</td>
+<td>9b</td>
+<td>Herhaling van MBX_INFO/MBX_REVOKE en gedrag van CUSTODY-entries bij een gewijzigde mailbox.</td>
+</tr>
+<tr>
+<td>G15</td>
+<td>10</td>
+<td>Capability wordt nooit ingetrokken; terugval naar standaard firmware geeft EXPIRED.</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+</div>
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
+const dark = window.matchMedia("(prefers-color-scheme: dark)");
+const figures = [...document.querySelectorAll("figure.diagram")];
+const sources = figures.map(f => f.querySelector("pre.mermaid-src").textContent);
+let generation = 0;
+
+async function renderAll() {
+  const gen = ++generation;
+  mermaid.initialize({
+    startOnLoad: false,
+    theme: dark.matches ? "dark" : "default",
+    securityLevel: "strict",
+    sequence: { useMaxWidth: false, wrap: false },
+  });
+  let ok = 0, failed = 0;
+  for (let i = 0; i < figures.length; i++) {
+    const fig = figures[i];
+    try {
+      const { svg } = await mermaid.render(`mmd-${gen}-${i}`, sources[i]);
+      if (gen !== generation) return;
+      fig.querySelector(".svg-host")?.remove();
+      fig.querySelector(".render-error")?.remove();
+      const host = document.createElement("div");
+      host.className = "svg-host";
+      host.innerHTML = svg;
+      fig.prepend(host);
+      fig.classList.add("rendered");
+      ok++;
+    } catch (err) {
+      failed++;
+      fig.classList.remove("rendered");
+      fig.querySelector(".svg-host")?.remove();
+      fig.querySelector(".render-error")?.remove();
+      const e = document.createElement("p");
+      e.className = "render-error";
+      e.textContent = "Syntax error: " + (err && err.message ? err.message : err);
+      fig.prepend(e);
+    }
+  }
+  document.body.dataset.rendered = String(ok);
+  document.body.dataset.failed = String(failed);
+}
+
+renderAll();
+dark.addEventListener("change", renderAll);
+</script>
+</body>
+</html>

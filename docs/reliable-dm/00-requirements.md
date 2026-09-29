@@ -17,7 +17,7 @@ Bob en Alice kunnen elkaar DM's sturen met gegarandeerde aflevering, los van of 
 | R5 | Bob ziet "in bewaring" (een mailbox heeft het bericht duurzaam opgeslagen), "op Alice' radio" (persistent opgeslagen, telefoon nog niet gesynct) en "afgeleverd" (Alice' telefoon heeft het opgehaald). De laatste twee zijn end-to-end bewijzen van Alice die mailbox noch repeater kan vervalsen. Draait Alice standaard firmware, dan is "op Alice' radio" het maximum. | Een kwaadwillende M kan hooguit "in bewaring" liegen of berichten achterhouden. |
 | R6 | Werkt ook zonder mailbox: dan een persistente outbox bij Bob met retries. | Bericht overleeft reboot van Bobs radio. Is Alice' radio bereikbaar, dan wordt het afgeleverd binnen één probe-interval (Alice met fork, `03` par. 4) of bij de volgende DM-retry (Alice standaard). Gemeten in stap 4 met een radio die periodiek aan staat. |
 | R7 | Mailbox-opslag is in praktijk onbeperkt via een host: een dedicated mailbox met eigen Heltec en eigen Pi (daemon `mbxd`, codebasis rs01d), los van RS01. De radionode is transport. | Zonder host geen "in bewaring". |
-| R8 | Eigen gebruik nu, later een upstream-PR: optionele feature achter build-flag, nette protocolextensie. | Zonder flag bit-identiek gedrag aan upstream. |
+| R8 | Eigen gebruik nu, later een upstream-PR: optionele feature achter build-flag, nette protocolextensie. | Zonder flag identiek gedrag aan upstream: identieke machinecode, data en preprocessor-uitvoer (alleen regelnummers in debug-info mogen verschuiven), bewezen met `tools/rdm/check-upstream-identical.sh`. |
 
 ## Twee soorten "offline"
 

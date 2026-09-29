@@ -2,7 +2,7 @@
 
 - Status: geaccepteerd (29 sep 2026), bijgewerkt na review `04-review.md`
 - Beslisser: Andy van Dongen
-- Details: `03-ontwerp.md`; requirements `00-requirements.md`
+- Details: `03-ontwerp.md`; requirements `00-requirements.md`; sequenties `05-sequenties.md`; implementatie `06-implementatieplan-v1.md`
 
 ## Context
 
@@ -46,6 +46,23 @@ Kernkeuzes:
 | 5 | Upstream | Eerst bouwen met voorlopige protocolnummers; GitHub-discussie pas met meetdata. #3518-fix als losse PR-kandidaat, nog niet indienen. |
 | 6 | Vinkje in de standaard app | `SEND_CONFIRMED` bij `ACK_R`: het vinkje betekent "op Alice' radio". "Afgeleverd" (telefoon) via 0x91 of het statuskanaal. Verworpen: vinkje pas bij `ACK_S` ("failed" tot sync, dubbele handmatige herzendingen). |
 
+## Aanvullingen na de sequenties (29 sep 2026)
+
+De gaten G1-G15 uit `05-sequenties.md` zijn gesloten met concrete regels in `03-ontwerp.md` par. 11. De belangrijkste:
+
+- De afzender kan vanuit elke niet-eindstate direct naar ON_RADIO of DELIVERED op een geldig bewijs, via welk kanaal het ook binnenkomt (probe-antwoord, STATUS, losse ACK).
+- Een eigen monotone RDM-klok voor alle deadlines; na een boot volgt een inhaalronde.
+- RESYNC wordt afgeleid uit een `store_id` in elke FETCH in plaats van een vlag die de ontvanger zelf moet detecteren.
+- Mailboxwissels en mislukte deposits hebben een eigen herhaalschema; capability wordt ingetrokken bij bewijs van standaard firmware, en in RETRY gaat minstens elke 24 u een hele DM.
+
+Voorlopige defaults, toegepast zonder te blokkeren (Andy kan ze herzien):
+
+| # | gat | default |
+|---|---|---|
+| D1 | G6 | Zonder betrouwbare klok tellen T_radio en T_sync alleen aan-tijd. |
+| D2 | G7, G12 | Bij verlies van een registerrecord of van een onbevestigd SYNCED-rapport: liever een mogelijk duplicaat dan verlies. |
+| D3 | G2 | Een eindstatus die geen 0x91-client ophaalt, vervalt na 24 u uit de outbox. |
+
 ## Gevolgen
 
 Positief
@@ -65,6 +82,7 @@ Negatief
 - De mailbox ziet volledige pubkeys, grootte, tijdstippen en ook wanneer Alice synct. Meer metadata dan een repeater.
 - Extra zendtijd (preamble 32 bij SF8): 7,9 s per hop per mailboxbericht, 0,8 s per hop per uur voor ophalen, 0,41 s per probe.
 - Voorlopige protocolnummers (txt_type 8, req_types 0x41, 0x42, 0x44, 0x45, push 0x91, cap-byte 0x81) kunnen botsen met toekomstig upstreamgebruik; afstemming nodig voor een PR.
+- Zonder betrouwbare klok (geen app-verbinding sinds boot, geen RTC-chip) lopen deadlines alleen tijdens aan-tijd (D1): een bericht kan langer in de outbox staan dan 7 dagen kalendertijd.
 - De cap-byte is niet geauthenticeerd: een vervalste cap laat de afzender hooguit tevergeefs op `ACK_S` wachten.
 
 ## Kantelpunt
