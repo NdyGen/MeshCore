@@ -8,6 +8,9 @@ namespace rdm {
 
 class Clock {
 public:
+  static constexpr uint16_t    RECORD_SIZE = 12;
+  static constexpr const char* PATH = "/rdm/meta";
+
   explicit Clock(RecordFile& meta);
   bool     begin(uint32_t millis_now, bool storage_recreated, uint32_t random32);  // new store_id on recreate
   uint32_t now(uint32_t millis_now, uint32_t rtc_now, bool rtc_trusted);          // G6, monotonic

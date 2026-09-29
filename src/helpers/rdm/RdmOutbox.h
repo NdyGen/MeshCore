@@ -45,9 +45,14 @@ public:
 
 class Outbox {
 public:
+  static constexpr uint16_t    RECORD_SIZE = 201;          // OutEntry, packed
+  static constexpr const char* PATH = "/rdm/outbox";
+  static constexpr uint16_t    WATCH_RECORD_SIZE = 28;     // receipt watch after SYNC_EXPIRED
+  static constexpr const char* WATCH_PATH = "/rdm/watch";
+
   enum class SendResult : uint8_t { NEW_ENTRY, EXISTING_ENTRY, NO_OUTBOX, TOO_LONG };
 
-  Outbox(RecordFile& file, RecordFile& watch, ContactTable& contacts, OutboxHost& host);   // watch: receipt-watch, payload 28
+  Outbox(RecordFile& file, RecordFile& watch, ContactTable& contacts, OutboxHost& host);
   bool       begin(uint32_t now);                          // load, recompute ACKs, schedule boot kick
   SendResult onAppSend(const uint8_t pub_prefix[6], uint32_t ts, uint8_t attempt, const char* text, size_t text_len,
                        uint32_t now, uint32_t& app_ack_out, bool& transmit_out);

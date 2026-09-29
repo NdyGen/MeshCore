@@ -3,7 +3,6 @@
 
 namespace rdm {
 
-static const uint32_t META_SIZE = 12;
 // Longest wait millisUntil() reports: keeps millis_now + wait clear of wrap-around in signed comparisons.
 static const uint32_t MAX_WAIT_MS = 0x7FFFFFFF;
 
@@ -15,12 +14,16 @@ static uint32_t get32(const uint8_t* p) {
   return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
+// Out-of-class definitions for C++11 builds (nRF52): Node binds these members to references.
+constexpr uint16_t    Clock::RECORD_SIZE;
+constexpr const char* Clock::PATH;
+
 Clock::Clock(RecordFile& meta) : _meta(meta) {
 }
 
 bool Clock::begin(uint32_t millis_now, bool storage_recreated, uint32_t random32) {
-  if (_meta.payloadSize() != META_SIZE || _meta.open() == RecordFile::Open::FAILED) return false;
-  uint8_t rec[META_SIZE];
+  if (_meta.payloadSize() != RECORD_SIZE || _meta.open() == RecordFile::Open::FAILED) return false;
+  uint8_t rec[RECORD_SIZE];
   bool have = _meta.read(0, rec);
   if (have) {
     _store_id = get32(rec);
@@ -51,7 +54,7 @@ uint32_t Clock::now(uint32_t millis_now, uint32_t rtc_now, bool rtc_trusted) {
 }
 
 bool Clock::persist() {
-  uint8_t rec[META_SIZE];
+  uint8_t rec[RECORD_SIZE];
   put32(rec, _store_id);
   put32(&rec[4], _base_time);
   put32(&rec[8], _last_req);

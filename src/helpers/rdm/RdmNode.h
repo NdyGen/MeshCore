@@ -43,6 +43,9 @@ public:
 
 class Node : private OutboxHost, private InboxHost, private FetcherHost {
 public:
+  static constexpr uint16_t    MBX_RECORD_SIZE = 32 + 16;   // own mailbox: pubkey | K_owner
+  static constexpr const char* MBX_PATH = "/rdm/mbx";
+
   Node(FileIO& io, NodeHost& host);
   bool begin();                      // open files, slot counts from io.freeBytes(); false = RDM off
   bool enabled() const;

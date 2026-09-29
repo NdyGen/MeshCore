@@ -17,8 +17,6 @@ namespace rdm {
 namespace {
 
 const uint32_t NEVER       = 0xFFFFFFFFUL;
-const uint16_t RECORD_SIZE = 201;
-const uint16_t WATCH_SIZE  = 28;
 
 // All outbox transmissions share one 60 s gap, so REQs to one mailbox are never closer than RDM_MBX_REQ_GAP_S.
 static_assert(RDM_OUTBOX_TX_GAP_S >= RDM_MBX_REQ_GAP_S, "outbox gap must cover the mailbox REQ gap");
@@ -106,6 +104,12 @@ bool beforeRadio(OutState s) { return s <= OutState::CUSTODY; }
 
 }
 
+// Out-of-class definitions for C++11 builds (nRF52): Node binds these members to references.
+constexpr uint16_t    Outbox::RECORD_SIZE;
+constexpr const char* Outbox::PATH;
+constexpr uint16_t    Outbox::WATCH_RECORD_SIZE;
+constexpr const char* Outbox::WATCH_PATH;
+
 Outbox::Outbox(RecordFile& file, RecordFile& watch, ContactTable& contacts, OutboxHost& host)
   : _file(file), _contacts(contacts), _host(host), _watch_file(watch), _n_slots(0), _n_watch(0), _tx_any(false),
     _last_fw_tx(0) {
@@ -133,10 +137,10 @@ void Outbox::markDm(Slot& s, uint32_t now) {
 bool Outbox::begin(uint32_t now) {
   _host.selfPub(_self);
   if (_file.open() == RecordFile::Open::FAILED || _file.payloadSize() != RECORD_SIZE) return false;
-  if (_watch_file.open() == RecordFile::Open::FAILED || _watch_file.payloadSize() != WATCH_SIZE) return false;
+  if (_watch_file.open() == RecordFile::Open::FAILED || _watch_file.payloadSize() != WATCH_RECORD_SIZE) return false;
   _n_slots = _file.slots() < RDM_OUTBOX_SLOTS_MAX ? (uint8_t)_file.slots() : (uint8_t)RDM_OUTBOX_SLOTS_MAX;
   _n_watch = _watch_file.slots() < RDM_WATCH_SLOTS_MAX ? (uint8_t)_watch_file.slots() : (uint8_t)RDM_WATCH_SLOTS_MAX;
-  uint8_t wbuf[WATCH_SIZE];
+  uint8_t wbuf[WATCH_RECORD_SIZE];
   for (uint8_t k = 0; k < _n_watch; k++) {
     WatchIdx& w = _watch[k];
     w.used = _watch_file.read(k, wbuf);
@@ -923,7 +927,7 @@ void Outbox::addWatch(const Slot& s, uint32_t now) {
     }
     if (_watch[k].expires < _watch[idx].expires) idx = k;
   }
-  uint8_t buf[WATCH_SIZE];
+  uint8_t buf[WATCH_RECORD_SIZE];
   uint32_t expires = addT(now, RDM_WATCH_S);
   memcpy(buf, s.ack_s, 6);
   put32(buf + 6, expires);
@@ -945,7 +949,7 @@ bool Outbox::matchWatch(const uint8_t* ack_s, uint32_t now) {
   for (uint8_t k = 0; k < _n_watch; k++) {
     WatchIdx& w = _watch[k];
     if (!w.used || memcmp(w.ack_s, ack_s, 6) != 0) continue;
-    uint8_t buf[WATCH_SIZE];
+    uint8_t buf[WATCH_RECORD_SIZE];
     bool have = _watch_file.read(k, buf);
     w.used = false;
     _watch_file.erase(k);
