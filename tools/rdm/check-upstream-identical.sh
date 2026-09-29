@@ -15,7 +15,7 @@
 set -euo pipefail
 
 BASE=22baa5e3
-ENVS="Heltec_v3_companion_radio_ble RAK_4631_companion_radio_ble Tbeam_SX1262_companion_radio_ble native native_kiss_modem"
+ENVS="Heltec_v3_companion_radio_ble RAK_4631_companion_radio_ble Tbeam_SX1262_companion_radio_ble Heltec_v3_repeater Heltec_v3_room_server native native_kiss_modem"
 TMPDIR="${TMPDIR:-/tmp}"
 WORK="${TMPDIR%/}/rdm-compat"
 KEEP=0
