@@ -1,4 +1,14 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::todo,
+        clippy::unreachable
+    )
+)]
 //! `mbxd`: the message store of the MeshCore DM mailbox, next to the mailbox radio (`examples/mailbox_server`).
 //!
 //! Functional core, imperative shell:
@@ -8,6 +18,7 @@
 //! - [`session`]: one radio session: lines in, replies out, a reply only after its commit.
 //! - [`system`], [`transport`], [`cli`]: clock, randomness, stdio and serial port, command line.
 
+pub mod cli;
 pub mod domain;
 pub mod mailbox;
 pub mod protocol;

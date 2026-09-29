@@ -12,9 +12,8 @@ name = "mbxd"
 path = "src/main.rs"
 
 [dependencies]
-# error handling: typed errors in the library, context in main
+# typed errors in the library; the binary maps them to exit codes
 thiserror = "2.0.21"
-anyhow = "1.0.104"
 # the database of mbxd.py; bundled so the Pi build does not depend on the system libsqlite3
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 # token_B = HMAC-SHA256(K_owner, sender)[0:8]
