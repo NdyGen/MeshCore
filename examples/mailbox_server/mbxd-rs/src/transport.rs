@@ -118,10 +118,15 @@ impl<R: Read> Iterator for SerialEvents<R> {
 
 /// Opens the radio's port once and keeps it: every open resets the ESP32, which then says HELLO.
 pub fn open_serial(path: &str) -> Result<Box<dyn serialport::SerialPort>, serialport::Error> {
-    let mut port = serialport::new(path, 115_200).timeout(SERIAL_IDLE).open()?;
-    // DTR and RTS drive the ESP32's reset and boot pins; low keeps it running normally
-    port.write_data_terminal_ready(false)?;
-    port.write_request_to_send(false)?;
+    // DTR and RTS drive the ESP32's reset and boot pins; low keeps it running normally. Ports without modem
+    // lines (a pty, some USB-CDC radios) refuse them, which pyserial ignores as well.
+    let mut port = serialport::new(path, 115_200)
+        .timeout(SERIAL_IDLE)
+        .dtr_on_open(false)
+        .open()?;
+    if let Err(e) = port.write_request_to_send(false) {
+        log::warn!("{path}: cannot set RTS low ({e}), continuing");
+    }
     Ok(port)
 }
 

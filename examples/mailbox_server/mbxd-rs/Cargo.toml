@@ -2,7 +2,7 @@
 name = "mbxd"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Mailbox daemon for the MeshCore DM mailbox radio (drop-in for mbxd.py)"
 license = "MIT"
 publish = false

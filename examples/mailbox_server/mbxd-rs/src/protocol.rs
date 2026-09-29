@@ -272,9 +272,9 @@ fn hex_array<const N: usize>(s: &str) -> Result<[u8; N], FieldError> {
         return Err(bad());
     }
     let mut out = [0u8; N];
-    for (byte, pair) in out.iter_mut().zip(digits.chunks_exact(2)) {
+    for (byte, &[hi, lo]) in out.iter_mut().zip(digits.as_chunks::<2>().0) {
         let nibble = |c: u8| (c as char).to_digit(16).ok_or_else(bad);
-        *byte = (nibble(pair[0])? << 4 | nibble(pair[1])?) as u8;
+        *byte = (nibble(hi)? << 4 | nibble(lo)?) as u8;
     }
     Ok(out)
 }

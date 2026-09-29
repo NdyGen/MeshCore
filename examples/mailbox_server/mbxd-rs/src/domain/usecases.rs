@@ -237,15 +237,15 @@ pub fn fetch<R: Repo + ?Sized>(
     let mut payload = None;
     if !req.no_payload {
         let senders = repo.senders(&owner4, State::Stored)?;
-        if let Some(sender) = policy::next_sender(&senders, owner.last_sender.as_ref()) {
-            if let Some(m) = repo.oldest(&owner4, &sender, State::Stored)? {
-                repo.update_message(&Message {
-                    state: State::Sent,
-                    ..m.clone()
-                })?;
-                repo.set_last_sender(&owner4, &sender)?;
-                payload = m.payload;
-            }
+        if let Some(sender) = policy::next_sender(&senders, owner.last_sender.as_ref())
+            && let Some(m) = repo.oldest(&owner4, &sender, State::Stored)?
+        {
+            repo.update_message(&Message {
+                state: State::Sent,
+                ..m.clone()
+            })?;
+            repo.set_last_sender(&owner4, &sender)?;
+            payload = m.payload;
         }
     }
 
@@ -288,10 +288,8 @@ pub fn owner_add<R: Repo + ?Sized>(
 ) -> Result<KOwner, AdminError> {
     // owners are named by their prefix on the wire, so a prefix identifies one owner
     let existing = repo.owner_by_prefix(&pubkey.owner4())?;
-    if let Some(o) = &existing {
-        if o.pubkey != *pubkey {
-            return Err(AdminError::PrefixTaken(pubkey.owner4()));
-        }
+    if existing.as_ref().is_some_and(|o| o.pubkey != *pubkey) {
+        return Err(AdminError::PrefixTaken(pubkey.owner4()));
     }
     let k = match (k_owner, existing) {
         (Some(k), _) => k,
