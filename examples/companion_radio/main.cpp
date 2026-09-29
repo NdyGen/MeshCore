@@ -114,7 +114,14 @@ MultiSerialInterface interface_manager;
 
 StdRNG fast_rng;
 SimpleMeshTables tables;
+#ifdef WITH_RELIABLE_DM
+  #include <helpers/rdm/ArduinoFileIO.h>
+  // RDM records sit next to the contacts and channels: on the extra FS where the board has one
+  rdm::ArduinoFileIO rdm_io(store.getSecondaryFS() ? *store.getSecondaryFS() : *store.getPrimaryFS());
+  MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store, rdm_io);
+#else
 MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store);
+#endif
 
 /* END GLOBAL OBJECTS */
 

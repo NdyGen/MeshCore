@@ -87,7 +87,21 @@ struct AdvertPath {
   uint8_t path[MAX_PATH_SIZE];
 };
 
+#ifdef WITH_RELIABLE_DM   // reliable DM, docs/reliable-dm/06-implementatieplan-v1.md (WP6)
+#include <helpers/rdm/RdmChatMesh.h>
+#include "RdmCompanionProto.h"
+
+#ifndef RDM_FRAME_QUEUE_SIZE
+  #define RDM_FRAME_QUEUE_SIZE  (RDM_OUTBOX_SLOTS_MAX + 8)   // a 0x91 replay of a full outbox plus live pushes
+#endif
+
+class MyMesh : public RdmChatMesh, public DataStoreHost {
+#else
+#ifdef RDM_STATUS_CHANNEL
+  #error "RDM_STATUS_CHANNEL needs WITH_RELIABLE_DM"
+#endif
 class MyMesh : public BaseChatMesh, public DataStoreHost {
+#endif
 public:
   class Listener {
     public:
@@ -108,7 +122,13 @@ public:
       virtual ~Listener() { }
   };
 
+#ifdef WITH_RELIABLE_DM
+  // rdm_io: storage of the RDM records (device: ArduinoFileIO next to the contacts, simulator: SimFileIO)
+  MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store,
+         rdm::FileIO& rdm_io);
+#else
   MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store);
+#endif
 
   void begin();
   void startInterface(BaseSerialInterface &serial);
@@ -288,6 +308,56 @@ private:
 
   #define ADVERT_PATH_TABLE_SIZE   16
   AdvertPath advert_paths[ADVERT_PATH_TABLE_SIZE]; // circular table
+#ifdef WITH_RELIABLE_DM
+
+public:
+  using RdmChatMesh::rdm;   // simulator and tests: setEnabled(), nextWakeupMillis()
+  // A clock that keeps running without power is trusted for RDM time (03 par. 11, G6), like one the app set.
+  void setHardwareRTC(bool present) { _rdm_hw_rtc = present; }
+  bool rtcTrusted() const { return _rdm_time_set || _rdm_hw_rtc; }
+
+protected:
+  void onPeerDataRecv(mesh::Packet* pkt, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data,
+                      size_t len) override;
+  // rdm::NodeHost, app side
+  uint32_t rtcNow(bool& trusted) override;
+  bool pushUserStatus(const uint8_t pub_prefix[6], uint32_t app_ack, rdm::UserStatus s, const uint8_t key[4],
+                      uint32_t ts) override;
+  bool pushSendConfirmed(uint32_t app_ack) override;
+  void pushMsgWaiting() override;
+  void rdmOnContactRemoved(const ContactInfo& removed) override;   // a contact turned out to be a mailbox (K3)
+
+private:
+  bool rdmSendTxt(const ContactInfo& recipient, uint32_t ts, uint8_t attempt, const char* text, size_t len);
+  bool rdmSyncNext();
+  bool rdmHandleCmd(size_t len);
+  void rdmAppStarted();
+  void rdmLoop();
+  bool rdmPendingWork() const;
+  bool rdmQueueFrame(const uint8_t* frame, size_t len);
+  void rdmNoteSent(uint32_t app_ack);
+  void rdmSetupStatusChannel();
+  void rdmPostStatusLine(const uint8_t pub_prefix[6], rdm::UserStatus s, uint32_t ts);
+
+  rdm::companion::FrameQueue<RDM_FRAME_QUEUE_SIZE, rdm::companion::STATUS_FRAME_LEN> _rdm_frames;
+  struct RdmSent {
+    uint32_t app_ack;
+    unsigned long at;
+  };
+  RdmSent  _rdm_sent[EXPECTED_ACK_TABLE_SIZE] = {};   // trip time for SEND_CONFIRMED
+  uint8_t  _rdm_sent_next = 0;
+  bool     _rdm_listing = false;  // CMD_RDM_LIST_OUTBOX: entries still to send, one per loop like CMD_GET_CONTACTS
+  uint8_t  _rdm_list_pos = 0;
+  uint8_t  _rdm_list_count = 0;
+  uint16_t _rdm_unread = 0;       // inbox messages not handed to the app yet, for the UI counter
+  int      _rdm_status_ch = -1;   // index of the "rdm-status" channel
+  bool _rdm_time_set = false;     // CMD_SET_DEVICE_TIME since boot
+  bool _rdm_hw_rtc = false;
+  bool _rdm_client = false;       // CMD_RDM_ENABLE on this connection (K9)
+  bool _rdm_connected = false;
+  bool _rdm_replaying = false;    // 0x91 replay after CMD_RDM_ENABLE: no status-channel lines again
+  bool _rdm_new_msg = false;      // pushMsgWaiting() during the current onPeerDataRecv()
+#endif
 };
 
 extern MyMesh the_mesh;

@@ -804,6 +804,9 @@ bool MyMesh::onContactPathRecv(ContactInfo& contact, uint8_t* in_path, uint8_t i
     }
   }
   // let base class handle received path and data
+#ifdef WITH_RELIABLE_DM
+  return RdmChatMesh::onContactPathRecv(contact, in_path, in_path_len, out_path, out_path_len, extra_type, extra, extra_len);
+#endif
   return BaseChatMesh::onContactPathRecv(contact, in_path, in_path_len, out_path, out_path_len, extra_type, extra, extra_len);
 }
 
@@ -897,8 +900,14 @@ uint32_t MyMesh::calcDirectTimeoutMillisFor(uint32_t pkt_airtime_millis, uint8_t
 
 void MyMesh::onSendTimeout() {}
 
+#ifdef WITH_RELIABLE_DM
+MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store,
+               rdm::FileIO& rdm_io)
+    : RdmChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables, rdm_io),
+#else
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store)
     : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
+#endif
       _serial(NULL), telemetry(MAX_PACKET_PAYLOAD - 4), _store(&store), _listener(NULL), _iter(0) {
   _iter_started = false;
   _cli_rescue = false;
@@ -1001,6 +1010,10 @@ void MyMesh::begin() {
   bootstrapRTCfromContacts();
   addChannel("Public", PUBLIC_GROUP_PSK); // pre-configure public channel
   _store->loadChannels(this);
+#ifdef WITH_RELIABLE_DM
+  rdm().begin();   // false: too little flash, the node stays on upstream behaviour
+  rdmSetupStatusChannel();
+#endif
 
   radio_driver.setParams(_prefs.freq, _prefs.bw, _prefs.sf, _prefs.cr);
   radio_driver.setTxPower(_prefs.tx_power_dbm);
@@ -1115,6 +1128,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     memcpy(&out_frame[i], _prefs.node_name, tlen);
     i += tlen;
     _serial->writeFrame(out_frame, i);
+#ifdef WITH_RELIABLE_DM
+    rdmAppStarted();
+#endif
   } else if (cmd_frame[0] == CMD_RUN_CLI_COMMAND && len >= 3) { // V14+
     int i = 1;
     char *text = (char *)&cmd_frame[i];
@@ -1139,6 +1155,12 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint8_t *pub_key_prefix = &cmd_frame[i];
     i += 6;
     ContactInfo *recipient = lookupContactByPubKey(pub_key_prefix, 6);
+#ifdef WITH_RELIABLE_DM
+    if (recipient && txt_type == TXT_TYPE_PLAIN &&
+        rdmSendTxt(*recipient, msg_timestamp, attempt, (const char *)&cmd_frame[i], len - i)) {
+      return;
+    }
+#endif
     if (recipient && (txt_type == TXT_TYPE_PLAIN || txt_type == TXT_TYPE_CLI_DATA || txt_type == TXT_TYPE_CLI_COMMAND)) {
       char *text = (char *)&cmd_frame[i];
       int tlen = len - i;
@@ -1169,6 +1191,9 @@ void MyMesh::handleCmdFrame(size_t len) {
         memcpy(&out_frame[2], &expected_ack, 4);
         memcpy(&out_frame[6], &est_timeout, 4);
         _serial->writeFrame(out_frame, 10);
+#ifdef WITH_RELIABLE_DM
+        _rdm_frames.fillAppAck(pub_key_prefix, msg_timestamp, expected_ack);   // TOO_BIG / NO_OUTBOX status
+#endif
       }
     } else {
       writeErrFrame(recipient == NULL
@@ -1290,6 +1315,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     uint32_t curr = getRTCClock()->getCurrentTime();
     if (secs >= curr) {
       getRTCClock()->setCurrentTime(secs);
+#ifdef WITH_RELIABLE_DM
+      _rdm_time_set = true;   // unlike bootstrapRTCfromContacts(), the phone's clock counts as trusted (G6)
+#endif
       writeOKFrame();
     } else {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
@@ -1413,6 +1441,9 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
   } else if (cmd_frame[0] == CMD_SYNC_NEXT_MESSAGE) {
+#ifdef WITH_RELIABLE_DM
+    if (rdmSyncNext()) return;
+#endif
     int out_len;
     if ((out_len = getFromOfflineQueue(out_frame)) > 0) {
       _serial->writeFrame(out_frame, out_len);
@@ -2056,6 +2087,9 @@ void MyMesh::handleCmdFrame(size_t len) {
     } else {
       writeErrFrame(ERR_CODE_TABLE_FULL);
     }
+#ifdef WITH_RELIABLE_DM
+  } else if (rdmHandleCmd(len)) {
+#endif
   } else {
     writeErrFrame(ERR_CODE_UNSUPPORTED_CMD);
     MESH_DEBUG_PRINTLN("ERROR: unknown command: %02X", cmd_frame[0]);
@@ -2414,6 +2448,9 @@ void MyMesh::checkSerialInterface() {
 
 void MyMesh::loop() {
   BaseChatMesh::loop();
+#ifdef WITH_RELIABLE_DM
+  rdmLoop();
+#endif
 
   if (_cli_rescue) {
     checkCLIRescueCmd();
@@ -2450,5 +2487,283 @@ bool MyMesh::advert() {
 
 // To check if there is pending work
 bool MyMesh::hasPendingWork() const {
+#ifdef WITH_RELIABLE_DM
+  if (rdmPendingWork()) return true;
+#endif
   return _mgr->getOutboundTotal() > 0 || dirty_contacts_expiry != 0;
 }
+
+#ifdef WITH_RELIABLE_DM
+// ---- reliable DM (06-implementatieplan-v1.md par. 3.13, 3.14; 03-ontwerp.md par. 1d and 11) ----
+
+#include <helpers/rdm/RdmCodec.h>
+
+using namespace rdm::companion;
+
+// Plain DMs go through the outbox: the app keeps its own retries, they land on the same entry (I8), and the answer is
+// RESP_CODE_SENT with the ACK_R of this attempt. false: not an outbox message, send it the upstream way.
+bool MyMesh::rdmSendTxt(const ContactInfo& recipient, uint32_t ts, uint8_t attempt, const char* text, size_t len) {
+  rdm::Node::AppSend a = rdm().onAppSend(recipient.id.pub_key, ts, attempt, text, len);
+  if (!a.handled) return false;
+
+  bool flood = recipient.out_path_len == OUT_PATH_UNKNOWN;
+  uint8_t plain[5 + rdm::MAX_TEXT + 3];
+  size_t n = rdm::codec::buildTxtPlain(plain, ts, TXT_TYPE_PLAIN, a.attempt, text, len, a.cap_trailer);
+  uint32_t est_timeout = 0;
+  // Entries in CUSTODY or ON_RADIO are not sent again; a DM that cannot go out now stays in the outbox, which sends it.
+  if (!a.transmit || n == 0 ||
+      !static_cast<rdm::NodeHost&>(*this).sendTxtPlain(recipient.id.pub_key, plain, n, false, est_timeout)) {
+    uint32_t t = _radio->getEstAirtimeFor(2 + 2 * PATH_HASH_SIZE + CIPHER_MAC_SIZE +
+                                          ((n + CIPHER_BLOCK_SIZE - 1) / CIPHER_BLOCK_SIZE) * CIPHER_BLOCK_SIZE);
+    est_timeout = flood ? calcFloodTimeoutMillisFor(t) : calcDirectTimeoutMillisFor(t, recipient.out_path_len);
+  } else {
+    rdm().onAppTransmitted(recipient.id.pub_key, ts, est_timeout);
+  }
+  rdmNoteSent(a.app_ack);
+
+  out_frame[0] = RESP_CODE_SENT;
+  out_frame[1] = flood ? 1 : 0;
+  memcpy(&out_frame[2], &a.app_ack, 4);
+  memcpy(&out_frame[6], &est_timeout, 4);
+  _serial->writeFrame(out_frame, 10);
+  return true;
+}
+
+// Every CMD_SYNC_NEXT_MESSAGE confirms the inbox record handed out before it (03 par. 1c); inbox records go first.
+bool MyMesh::rdmSyncNext() {
+  rdm().onSyncRequest();
+  rdm::InRecord rec;
+  uint16_t slot;
+  if (!rdm().nextInboxFrame(rec, slot)) {
+    _rdm_unread = 0;
+    return false;
+  }
+  _serial->writeFrame(out_frame, encodeContactMsg(out_frame, MAX_FRAME_SIZE, rec, app_target_ver));
+  rdm().onInboxFrameHanded(slot);
+  if (_rdm_unread > 0) _rdm_unread--;
+  if (_listener) _listener->onQueueSizeChanged(offline_queue_len + _rdm_unread);
+  return true;
+}
+
+bool MyMesh::rdmHandleCmd(size_t len) {
+  if (cmd_frame[0] == CMD_RDM_ENABLE) {
+    uint8_t ver = 0;
+    if (!parseEnable(cmd_frame, len, ver) || ver != PROTO_VERSION) {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    } else if (!rdm().enabled()) {
+      writeErrFrame(ERR_CODE_BAD_STATE);
+    } else {
+      _rdm_client = true;
+      writeOKFrame();
+      _rdm_replaying = true;
+      rdm().onClientConnected(true);   // 0x91 for every entry the app has not seen yet (G5)
+      _rdm_replaying = false;
+    }
+    return true;
+  }
+  if (cmd_frame[0] == CMD_RDM_SET_MAILBOX) {
+    const uint8_t *mbx_pub, *k_owner;
+    if (parseSetMailbox(cmd_frame, len, mbx_pub, k_owner) == MailboxCmd::INVALID) {
+      writeErrFrame(ERR_CODE_ILLEGAL_ARG);
+    } else if (rdm().setOwnMailbox(mbx_pub, k_owner)) {
+      writeOKFrame();
+    } else {
+      writeErrFrame(rdm().enabled() ? ERR_CODE_FILE_IO_ERROR : ERR_CODE_BAD_STATE);
+    }
+    return true;
+  }
+  if (cmd_frame[0] == CMD_RDM_LIST_OUTBOX) {
+    if (!rdm().enabled()) {
+      writeErrFrame(ERR_CODE_BAD_STATE);
+      return true;
+    }
+    rdm::OutEntry e;
+    uint8_t n = 0;
+    while (rdm().listOutbox(&e, 1, n) == 1) n++;
+    uint8_t f[OUTBOX_START_LEN];
+    _serial->writeFrame(f, encodeOutboxStart(f, n));
+    _rdm_listing = true;   // entries and END follow from rdmLoop()
+    _rdm_list_pos = 0;
+    _rdm_list_count = n;
+    return true;
+  }
+  return false;
+}
+
+// A new app session: pending SEND_CONFIRMED go out (G5), unconfirmed inbox records are offered again, and 0x91 waits
+// for CMD_RDM_ENABLE on this connection (K9).
+void MyMesh::rdmAppStarted() {
+  _rdm_client = false;
+  rdm().onClientDisconnected();
+  rdm().onClientConnected(false);
+}
+
+void MyMesh::rdmLoop() {
+  rdm().loop();
+
+  bool connected = _serial && _serial->isConnected();
+  if (_rdm_connected && !connected) {
+    rdm().onClientDisconnected();
+    _rdm_client = false;
+    _rdm_listing = false;
+    _rdm_frames.clear();
+  }
+  _rdm_connected = connected;
+  if (!connected || _serial->isWriteBusy()) return;
+
+  if (!_rdm_frames.empty()) {
+    size_t len;
+    const uint8_t* f = _rdm_frames.front(len);
+    _serial->writeFrame(f, len);
+    _rdm_frames.pop();
+  } else if (_rdm_listing) {
+    // The outbox may change while listing: stop early rather than send a stale or missing row.
+    rdm::OutEntry e;
+    if (_rdm_list_pos < _rdm_list_count && rdm().listOutbox(&e, 1, _rdm_list_pos) == 1) {
+      uint8_t f[OUTBOX_ENTRY_LEN];
+      _serial->writeFrame(f, encodeOutboxEntry(f, outboxRow(e, _rdm_list_pos)));
+      _rdm_list_pos++;
+    } else {
+      uint8_t f[OUTBOX_END_LEN];
+      _serial->writeFrame(f, encodeOutboxEnd(f));
+      _rdm_listing = false;
+    }
+  }
+}
+
+bool MyMesh::rdmPendingWork() const {
+  return _rdm_connected && (!_rdm_frames.empty() || _rdm_listing);
+}
+
+bool MyMesh::rdmQueueFrame(const uint8_t* frame, size_t len) {
+  return _rdm_frames.push(frame, len);
+}
+
+void MyMesh::rdmNoteSent(uint32_t app_ack) {
+  _rdm_sent[_rdm_sent_next].app_ack = app_ack;
+  _rdm_sent[_rdm_sent_next].at = _ms->getMillis();
+  _rdm_sent_next = (_rdm_sent_next + 1) % EXPECTED_ACK_TABLE_SIZE;
+}
+
+// Runs the RDM receive path, then gives the UI the preview and connection bookkeeping that MyMesh::onMessageRecv
+// does for upstream DMs, which RdmChatMesh stores in the inbox instead.
+void MyMesh::onPeerDataRecv(mesh::Packet* pkt, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data,
+                            size_t len) {
+  _rdm_new_msg = false;
+  RdmChatMesh::onPeerDataRecv(pkt, type, sender_idx, secret, data, len);
+  if (!_rdm_new_msg || type != PAYLOAD_TYPE_TXT_MSG) return;
+  _rdm_new_msg = false;
+
+  ContactInfo* from = rdmMatchedPeer(sender_idx);
+  rdm::codec::TxtParsed p;
+  if (!from || !rdm::codec::parseTxtPlain(data, len, p)) return;
+  markConnectionActive(*from);
+  if (_listener) {
+    char text[rdm::INBOX_TEXT_MAX + 1];
+    size_t n = p.text_len < rdm::INBOX_TEXT_MAX ? p.text_len : rdm::INBOX_TEXT_MAX;
+    memcpy(text, p.text, n);
+    text[n] = 0;
+    _listener->onMessageRecv(pkt, *from, TXT_TYPE_PLAIN, p.ts, text);
+  }
+}
+
+// ---- rdm::NodeHost, app side ----
+
+uint32_t MyMesh::rtcNow(bool& trusted) {
+  trusted = rtcTrusted();
+  return getRTCClock()->getCurrentTime();
+}
+
+bool MyMesh::pushUserStatus(const uint8_t pub_prefix[6], uint32_t app_ack, rdm::UserStatus s, const uint8_t key[4],
+                            uint32_t ts) {
+#ifdef RDM_STATUS_CHANNEL
+  if (!_rdm_replaying && s != rdm::UserStatus::QUEUED) rdmPostStatusLine(pub_prefix, s, ts);
+#endif
+  if (!_rdm_client || !_serial->isConnected()) return false;
+  StatusPush p;
+  p.app_ack = app_ack;
+  p.status = s;
+  memcpy(p.key, key, 4);
+  p.ts = ts;
+  memcpy(p.pub_prefix, pub_prefix, 6);
+  uint8_t f[STATUS_FRAME_LEN];
+  return rdmQueueFrame(f, encodeStatus(f, p));
+}
+
+bool MyMesh::pushSendConfirmed(uint32_t app_ack) {
+  if (!_serial->isConnected()) return false;
+  uint32_t trip = 0;
+  for (int i = 0; i < EXPECTED_ACK_TABLE_SIZE; i++) {
+    if (_rdm_sent[i].app_ack == app_ack && _rdm_sent[i].at != 0) trip = _ms->getMillis() - _rdm_sent[i].at;
+  }
+  uint8_t f[SEND_CONFIRMED_LEN];
+  return rdmQueueFrame(f, encodeSendConfirmed(f, app_ack, trip));
+}
+
+void MyMesh::pushMsgWaiting() {
+  _rdm_new_msg = true;
+  _rdm_unread++;
+  if (_serial->isConnected()) {
+    uint8_t f[1] = {PUSH_CODE_MSG_WAITING};
+    rdmQueueFrame(f, 1);
+  }
+  if (_listener) _listener->onQueueSizeChanged(offline_queue_len + _rdm_unread);
+}
+
+// Like onContactOverwrite(), but may run in begin() before startInterface(), and the contacts file must lose it too.
+void MyMesh::rdmOnContactRemoved(const ContactInfo& removed) {
+  _store->deleteBlobByKey(removed.id.pub_key, PUB_KEY_SIZE);
+  if (_serial && _serial->isConnected()) {
+    uint8_t f[1 + PUB_KEY_SIZE];
+    f[0] = PUSH_CODE_CONTACT_DELETED;
+    memcpy(&f[1], removed.id.pub_key, PUB_KEY_SIZE);
+    _serial->writeFrame(f, sizeof(f));
+  }
+  dirty_contacts_expiry = futureMillis(LAZY_CONTACTS_WRITE_DELAY);
+}
+
+// ---- local status channel "rdm-status" for the standard app (RDM_STATUS_CHANNEL, 03 par. 1d) ----
+
+// Found by name after loadChannels(); otherwise the first free slot, with a key only this device has.
+void MyMesh::rdmSetupStatusChannel() {
+#ifdef RDM_STATUS_CHANNEL
+  ChannelDetails ch;
+  int free_idx = -1;
+  for (int i = 0; i < MAX_GROUP_CHANNELS && getChannel(i, ch); i++) {
+    if (strcmp(ch.name, STATUS_CHANNEL_NAME) == 0) {
+      _rdm_status_ch = i;
+      return;
+    }
+    if (free_idx < 0 && ch.name[0] == 0) free_idx = i;
+  }
+  if (free_idx < 0) return;
+  memset(&ch, 0, sizeof(ch));
+  StrHelper::strncpy(ch.name, STATUS_CHANNEL_NAME, sizeof(ch.name));
+  statusChannelSecret(ch.channel.secret, self_id.pub_key);
+  if (setChannel(free_idx, ch)) _rdm_status_ch = free_idx;
+#endif
+}
+
+// Status lines are queued like received channel messages; a full offline queue drops channel frames first, so a line
+// can get lost (03 par. 1d).
+void MyMesh::rdmPostStatusLine(const uint8_t pub_prefix[6], rdm::UserStatus s, uint32_t ts) {
+  if (_rdm_status_ch < 0) return;
+  char name[32];
+  ContactInfo* c = lookupContactByPubKey(pub_prefix, 6);
+  if (c) {
+    StrHelper::strzcpy(name, c->name, sizeof(name));
+  } else {
+    mesh::Utils::toHex(name, pub_prefix, 6);
+  }
+  char line[96];
+  formatStatusLine(line, sizeof(line), name, s, ts);
+  uint8_t f[MAX_FRAME_SIZE];
+  size_t n = encodeChannelMsg(f, sizeof(f), app_target_ver, (uint8_t)_rdm_status_ch, getRTCClock()->getCurrentTime(), line);
+  addToOfflineQueue(f, (int)n);
+  if (_serial->isConnected()) {
+    uint8_t w[1] = {PUSH_CODE_MSG_WAITING};
+    rdmQueueFrame(w, 1);
+  }
+  if (_listener) _listener->onQueueSizeChanged(offline_queue_len + _rdm_unread);
+}
+#endif
