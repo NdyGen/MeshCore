@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Checks that every declaration fixed in 06-implementatieplan-v1.md par. 3 is present in the RDM headers.
 
-usage: check-headers.py [header_dir]   (default: src/helpers/rdm)
+usage: check-headers.py [header_dir]   (default: src/helpers/rdm, including its subdirectories)
 Workers may add private members; any change to the fixed public API shows up as a missing declaration.
 """
 import glob
@@ -18,7 +18,8 @@ def norm(text):
     return re.sub(r"\s+", " ", re.sub(r"//.*", "", text)).strip()
 
 
-headers = norm(" ".join(open(f, encoding="utf-8").read() for f in glob.glob(os.path.join(hdr_dir, "*.h"))))
+headers = norm(" ".join(open(f, encoding="utf-8").read()
+                         for f in glob.glob(os.path.join(hdr_dir, "**", "*.h"), recursive=True)))
 missing = []
 for start, end in (("## 3. Vastgelegde interfaces", "### 3.13"), ("### 3.15", "### 3.16")):
     section = doc[doc.find(start):doc.find(end)]
