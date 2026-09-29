@@ -311,6 +311,17 @@ bool MemMailboxBackend::stat(uint32_t id, const uint8_t sender_pub[32], const ui
     item.state = wireState(m->state);
     if (m->state == MsgState::ON_RADIO || m->state == MsgState::SYNC_EXPIRED) memcpy(item.ack, m->ack_r, 6);
     if (m->state == MsgState::DELIVERED) memcpy(item.ack, m->ack_s, 6);
+    if (_lie != Lie::NONE && m->state != MsgState::DELIVERED) {
+      item.state = MbxState::DELIVERED;
+      if (_lie == Lie::DELIVERED_WITH_ACK_R) {
+        memcpy(item.ack, m->ack_r, 6);
+      } else {
+        for (uint8_t k = 0; k < 6; k++) {
+          _lie_rng = _lie_rng * 1664525u + 1013904223u;
+          item.ack[k] = (uint8_t)(_lie_rng >> 24);
+        }
+      }
+    }
   }
   return true;
 }

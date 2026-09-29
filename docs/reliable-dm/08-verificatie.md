@@ -1,6 +1,8 @@
 # 08: Verificatie v1
 
-Onafhankelijke controle van de v1-implementatie (29 sep 2026), op de ongecommitte hoofdcheckout van `feature/reliable-dm`. Niets overgenomen uit eerdere rapporten: alles hieronder is zelf gedraaid. Mutaties en ad-hoc tests draaiden in een kopie in de scratchpad; de hoofdcheckout is alleen met dit document gewijzigd.
+Onafhankelijke controle van de v1-implementatie (29 sep 2026), op de hoofdcheckout van `feature/reliable-dm`. Getest op de toen ongecommitte stand; die is tijdens de verificatie gecommit (`1105c812..644ec665`) en is byte-gelijk aan de geteste snapshot. Niets overgenomen uit eerdere rapporten: alles hieronder is zelf gedraaid. Mutaties en ad-hoc tests draaiden in een kopie in de scratchpad.
+
+Bijgewerkt 30 sep 2026: B1, B2, B3 en B5 zijn gedicht met tests in de hoofdcheckout (par. 8), zonder wijziging in productiecode; B6 met twee extra envs in de compat-check. Regelnummers in par. 2-6 verwijzen naar `644ec665`; par. 8 naar de werkmap met de nieuwe tests.
 
 ## 1. Tests
 
@@ -15,7 +17,7 @@ Onafhankelijke controle van de v1-implementatie (29 sep 2026), op de ongecommitt
 | native_rdm_status | 38/38 |
 | pytest mbxd | 86 passed |
 
-Gelijk aan `06` par. 6.3.
+Gelijk aan `06` par. 6.3. Na het dichten van de gaten (par. 8): native_rdm 436/436, de rest ongewijzigd, `ALL PASSED`.
 
 ## 2. Traceerbaarheid
 
@@ -98,9 +100,11 @@ Conclusie: de claim klopt voor v1, maar de repo bewijst hem niet.
 
 ## 5. Compat (R8)
 
-`tools/rdm/check-upstream-identical.sh --compare-only` op de bestaande build (23:18-23:20, geen bron nieuwer): CODE-IDENTICAL, exit 0. Omdat bestanden bij integratie met oude mtime gekopieerd kunnen zijn, daarna ook volledig herbouwd: COMPAT_FULL. RAK 4631, native en native_kiss_modem byte-identiek; Heltec V3 en T-Beam alleen debug-info in `main.cpp.o`, `MyMesh.cpp.o`, `UITask.cpp.o`, `BaseChatMesh.cpp.o`, `Mesh.cpp.o` en de ELF/image-hashes in `firmware.bin`.
+`tools/rdm/check-upstream-identical.sh --compare-only` op de bestaande build (23:18-23:20, geen bron nieuwer): CODE-IDENTICAL, exit 0. Omdat bestanden bij integratie met oude mtime gekopieerd kunnen zijn, daarna ook volledig herbouwd (`--work` in de scratchpad): eveneens CODE-IDENTICAL, exit 0. RAK 4631, native en native_kiss_modem byte-identiek; Heltec V3 en T-Beam alleen debug-info in `main.cpp.o`, `MyMesh.cpp.o`, `UITask.cpp.o`, `BaseChatMesh.cpp.o`, `Mesh.cpp.o` en de ELF/image-hashes in `firmware.bin`.
 
 ## 6. Bevindingen
+
+Status per bevinding: par. 8.
 
 | # | ernst | bevinding | aanbeveling |
 |---|---|---|---|
@@ -113,6 +117,21 @@ Conclusie: de claim klopt voor v1, maar de repo bewijst hem niet.
 
 ## 7. Eindoordeel
 
-In de simulator werkt v1 aantoonbaar. Alle tests slagen. De scenario's 1-10 modelleren de offline-momenten realistisch (echte reboot met RAM-verlies, app weg, flashverlies, Pi weg) en asserten de volledige statusreeks bij Bob. 18 van 20 gerichte mutaties worden gevangen. De E2E-eigenschappen (M ziet geen plaintext, kan "afgeleverd" niet vervalsen) kloppen, en zonder flag is de build code-identiek aan upstream.
+In de simulator werkt v1 aantoonbaar. Alle tests slagen (436/436 native_rdm). De scenario's 1-10 modelleren de offline-momenten realistisch (echte reboot met RAM-verlies, app weg, flashverlies, Pi weg) en asserten de volledige statusreeks bij Bob. Na par. 8 worden alle 20 gerichte mutaties gevangen. De E2E-eigenschappen (M ziet geen plaintext, kan "afgeleverd" niet vervalsen) staan nu als scenario in de repo. Zonder flag is de build code-identiek aan upstream.
 
-Niet aangetoond: twee kerngaranties zijn niet door een test bewaakt (B1, B2), R3 alleen ad hoc, en niets is op echte radio's of met de echte standaard app getoetst (HIL, `06` par. 8). Advies: B1 en B2 dichten vóór de commit; daarna HIL.
+Niet aangetoond: gedrag op echte radio's, met een echte upstream-companion en -repeater (B4) en met de echte standaard app (R1, `03` par. 9). Dat is HIL (`06` par. 8), de volgende stap.
+
+## 8. Gedichte gaten (30 sep 2026)
+
+Alleen tests en testsupport gewijzigd. Bewijs tegen de mutanten: de bijgewerkte hoofdcheckout gekopieerd, mutant toegepast met hetzelfde patroon als in par. 3, de betrokken suites gedraaid.
+
+| # | status | test(s) | bewijs |
+|---|---|---|---|
+| B1 | opgelost | `OutboxTest.OnRadioStatusDeliveredWithoutValidAckSIsIgnored` (`test/test_rdm_outbox/test_rdm_outbox.cpp:1270`): in ON_RADIO worden DELIVERED met `ACK_R` en met willekeurige bytes genegeerd, met `ACK_S` geaccepteerd. `RdmScenario.E2E_LyingMailboxCannotForgeDelivered` (`test/test_rdm_scenarios/test_rdm_scenarios.cpp:1205`): M liegt 4 dagen DELIVERED (eerst met `ACK_R`, dan willekeurig) via `MemMailboxBackend::setLie` (`test/rdm_support/MemMailboxBackend.h:21`, `.cpp:314`); Bob blijft op CUSTODY, ON_RADIO tot Alice echt synct. | Op M10 falen beide; op de huidige code slagen beide. |
+| B2 | opgelost | `InboxTest.InboxWriteFailureAloneGivesNoAck` (`test/test_rdm_inbox/test_rdm_inbox.cpp:304`): alleen de inbox-write faalt (`io.fail_path = INBOX_PATH`); geen `ACK_R`, geen spoor, query UNKNOWN, later wel NEW. | Op M02 faalt de test; op de huidige code slaagt hij. |
+| B3 | opgelost | `RdmScenario.E2E_MailboxSeesOnlyCiphertext` (`test_rdm_scenarios.cpp:1161`), met echte `mbxd`: geen plaintext in wat M met eigen sleutels ontsleutelt, M-Bob en M-Alice openen de inner payload niet, de `mbxd`-database bevat ciphertext maar geen plaintext. | Er is in v1 geen codepad dat de plaintext naar M brengt, dus geen natuurlijke mutant. Positieve controles (Bob-Alice opent de payload; de ciphertext staat in de database) voorkomen dat de test vacuüm slaagt. |
+| B4 | open | - | Vraagt HIL. |
+| B5 | opgelost (deels) | S03 assert nu dat de eerste probe na aangaan het probeschema voortzet en binnen 30 min + jitter na aangaan valt (`test_rdm_scenarios.cpp:286-291`); daarna volgt de DM binnen 60 s. `RdmScenario.S04_BobWegVoorAckS_CompanionNode` (`:363`): S04 op de echte `MyMesh`. | Beide slagen op beide companionmodellen. Open blijft het punt over de sync-lus van de standaard app (`03` par. 9, HIL); een scenario met Bobs reboot in RETRY is niet toegevoegd (unit-dekking volstaat, par. 2). |
+| B6 | opgelost | `tools/rdm/check-upstream-identical.sh` vergelijkt nu ook `Heltec_v3_repeater` en `Heltec_v3_room_server` (`ENVS`, aangepast door een andere sessie). | `--compare-only`: CODE-IDENTICAL, exit 0. Repeater: obj 288, pp 4, img 1; room server: obj 287, pp 4, img 1; 0 verschil in code of data. Alleen debug-info in `Mesh.cpp.o` en `BaseChatMesh.cpp.o`, plus de ELF/image-hashes in `firmware.bin`. Door deze verificatie nagedraaid met hetzelfde resultaat. |
+
+`tools/rdm/run-all-tests.sh` na deze wijzigingen: native 46/46, native_kiss_modem 8/8, native_sim 22/22, native_rdm 436/436, native_rdm_status 38/38, pytest `mbxd` 86 passed, `ALL PASSED`. `tools/rdm/check-headers.py`: 0 ontbrekend.

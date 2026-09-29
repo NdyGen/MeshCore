@@ -1266,6 +1266,25 @@ TEST_F(OutboxTest, G8_CustodyStatusDeliveredWithValidAckS) {
   EXPECT_EQ(host.confirmed.size(), 1u) << "G8: SEND_CONFIRMED although ACK_R was never seen";
 }
 
+// R5: in ON_RADIO too, only Alice's ACK_S makes a mailbox's DELIVERED count; M knows ACK_R from her report.
+TEST_F(OutboxTest, OnRadioStatusDeliveredWithoutValidAckSIsIgnored) {
+  toCustody("hi");
+  uint8_t r[6] = {0};
+  ackR(r, "hi");
+  statusReply(MbxState::ON_RADIO, r, 6);
+  ASSERT_EQ(state(), OutState::ON_RADIO);
+  statusReply(MbxState::DELIVERED, r, 6);
+  EXPECT_EQ(state(), OutState::ON_RADIO) << "mailbox offers ACK_R as ACK_S";
+  uint8_t junk[6] = {1, 2, 3, 4, 5, 6};
+  statusReply(MbxState::DELIVERED, junk, 6);
+  EXPECT_EQ(state(), OutState::ON_RADIO) << "mailbox offers random bytes as ACK_S";
+  host.rdm_client = false;
+  uint8_t s[6];
+  ackS(s, "hi");
+  statusReply(MbxState::DELIVERED, s, 6);
+  EXPECT_EQ(state(), OutState::DELIVERED);
+}
+
 TEST_F(OutboxTest, CustodyStatusUnknownGoesToRetryAndRejectedIsFinal) {
   host.rdm_client = false;
   toCustody("a");

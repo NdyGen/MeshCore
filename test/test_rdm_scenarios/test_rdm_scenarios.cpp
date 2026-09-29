@@ -5,8 +5,14 @@
 
 #include "Scenario.h"
 
+#include <Utils.h>
 #include <helpers/rdm/RdmCodec.h>
 
+#include <dirent.h>
+
+#include <algorithm>
+#include <fstream>
+#include <iterator>
 #include <set>
 
 using namespace sim;
@@ -278,6 +284,11 @@ void runS03(CompanionModel model) {
 
   auto after = w.wires.sent(*w.bob, Kind::QUERY, t_up);
   ASSERT_GE(after.size(), 1u);
+  // R6: reachable again means delivered within one probe interval: the schedule goes on, no backoff after power-on
+  EXPECT_TRUE(afterInterval(probes.back().t_ms, after[0].t_ms, RDM_SCHED_PROBE_DAY1)) << times(probes, t0);
+  const uint32_t probe_j = std::min<uint32_t>(RDM_SCHED_PROBE_DAY1 / RDM_JITTER_DIV, RDM_JITTER_MAX_S);
+  EXPECT_LE(after[0].t_ms - t_up, (uint64_t)(RDM_SCHED_PROBE_DAY1 + probe_j) * SEC + SEC)
+      << "first probe after power-on within 30 min + jitter";
   Wire r;
   ASSERT_TRUE(firstResponse(w, after[0], r)) << w.wires.dump(t_up);
   EXPECT_EQ(rdm::QueryState::UNKNOWN, queryAnswer(r).state);
@@ -346,6 +357,13 @@ void runS04(World& w, const std::function<void()>& while_bob_off, rdm::QueryStat
 
 TEST(RdmScenario, S04_BobWegVoorAckS) {
   World w{WorldOptions()};
+  runS04(w, [] {}, rdm::QueryState::SYNCED);
+}
+
+TEST(RdmScenario, S04_BobWegVoorAckS_CompanionNode) {
+  WorldOptions o;
+  o.model = CompanionModel::FIRMWARE;
+  World w(o);
   runS04(w, [] {}, rdm::QueryState::SYNCED);
 }
 
@@ -1105,4 +1123,117 @@ TEST(RdmScenario, S14_HiddenTerminalVerlorenAck) {
     EXPECT_EQ(1u, w.aliceApp().inboxCount(text));
     EXPECT_EQ(1u, w.bobApp().confirmCount(id));
   }
+}
+
+namespace {
+
+bool containsText(const std::vector<uint8_t>& hay, const std::string& needle) {
+  return std::search(hay.begin(), hay.end(), needle.begin(), needle.end()) != hay.end();
+}
+
+std::vector<uint8_t> filesIn(const std::string& dir) {
+  std::vector<uint8_t> all;
+  DIR* d = opendir(dir.c_str());
+  if (!d) return all;
+  while (dirent* e = readdir(d)) {
+    std::string n = e->d_name;
+    if (n == "." || n == "..") continue;
+    std::ifstream f(dir + "/" + n, std::ios::binary);
+    all.insert(all.end(), std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
+  }
+  closedir(d);
+  return all;
+}
+
+// inner = dest(1) | src(1) | MAC(2) | ciphertext: true if `secret` authenticates and decrypts it.
+bool opensInner(const uint8_t* secret, const uint8_t* inner, uint8_t len, std::vector<uint8_t>& plain) {
+  plain.assign(len, 0);
+  int n = mesh::Utils::MACThenDecrypt(secret, plain.data(), inner + 2, len - 2);
+  if (n <= 0) return false;
+  plain.resize((size_t)n);
+  return true;
+}
+
+}
+
+// R3: M sees only ciphertext. Nothing M decrypts with its own keys holds the text, its secrets with Bob and Alice do
+// not open the stored inner payload, and mbxd's database holds the ciphertext but not the text.
+TEST(RdmScenario, E2E_MailboxSeesOnlyCiphertext) {
+  WorldOptions o;
+  o.mailboxes = 1;
+  o.real_mbxd = true;
+  World w(o);
+  SimNode& m = *w.mbx[0];
+  w.powerOff(*w.alice);
+  const std::string text = textOf(120, "E2E-secret");
+  int id = w.bobSends(text);
+  ASSERT_TRUE(w.runUntil([&] { return w.bobApp().hasStatus(id, UserStatus::CUSTODY); }, HOUR)) << w.trace(id);
+  w.runFor(MIN);
+
+  auto at_m = w.wires.select([&](const Wire& x) { return x.origin == m.index() || x.dest == m.index(); });
+  ASSERT_FALSE(at_m.empty());
+  for (const Wire& x : at_m) {
+    EXPECT_FALSE(containsText(x.body, text)) << w.wires.describe(x);
+    EXPECT_EQ(std::string::npos, x.text.find("E2E-secret")) << w.wires.describe(x);
+  }
+
+  auto deps = w.wires.sent(*w.bob, Kind::DEPOSIT);
+  ASSERT_GE(deps.size(), 1u);
+  uint8_t owner[4];
+  const uint8_t* inner = nullptr;
+  uint8_t inner_len = 0;
+  ASSERT_TRUE(rdm::codec::parseDeposit(deps.back().body.data(), deps.back().body.size(), owner, inner, inner_len));
+  uint8_t s_mb[32], s_ma[32], s_ba[32];
+  m.identity().calcSharedSecret(s_mb, w.bob->identity().pub_key);
+  m.identity().calcSharedSecret(s_ma, w.alice->identity().pub_key);
+  w.bob->identity().calcSharedSecret(s_ba, w.alice->identity().pub_key);
+  std::vector<uint8_t> plain;
+  EXPECT_FALSE(opensInner(s_mb, inner, inner_len, plain)) << "M-Bob secret opens the inner payload";
+  EXPECT_FALSE(opensInner(s_ma, inner, inner_len, plain)) << "M-Alice secret opens the inner payload";
+  ASSERT_TRUE(opensInner(s_ba, inner, inner_len, plain)) << "Bob-Alice secret must open it";
+  EXPECT_TRUE(containsText(plain, text));
+
+  std::vector<uint8_t> db = filesIn(w.mbxd_dir);
+  ASSERT_FALSE(db.empty()) << w.mbxd_dir;
+  EXPECT_TRUE(std::search(db.begin(), db.end(), inner + 4, inner + 20) != db.end()) << "ciphertext stored by mbxd";
+  EXPECT_FALSE(containsText(db, text)) << "plaintext in mbxd's database";
+  EXPECT_FALSE(containsText(db, "E2E-secret"));
+}
+
+// R5: M answers every STATUS with DELIVERED, first with the ACK_R from Alice's report (the strongest lie it can
+// make), then with random bytes. Bob shows DELIVERED only after Alice's app really synced.
+TEST(RdmScenario, E2E_LyingMailboxCannotForgeDelivered) {
+  WorldOptions o;
+  o.mailboxes = 1;
+  World w(o);
+  w.powerOff(*w.alice);
+  const std::string text = textOf(120, "E2E-lie");
+  int id = w.bobSends(text);
+  ASSERT_TRUE(w.runUntil([&] { return w.bobApp().hasStatus(id, UserStatus::CUSTODY); }, HOUR)) << w.trace(id);
+  auto lies = [&](uint64_t from) {
+    size_t n = 0;
+    for (const Wire& x : w.wires.sent(*w.mbx[0], Kind::STATUS_RESP, from)) n += statusAnswer(x).state == rdm::MbxState::DELIVERED;
+    return n;
+  };
+
+  const uint64_t t_ack_r = w.s.now();
+  w.memBackend(0).setLie(MemMailboxBackend::Lie::DELIVERED_WITH_ACK_R);
+  w.powerOn(*w.alice);   // her app stays away: nothing is synced
+  w.runFor(2 * DAY);
+  EXPECT_GE(lies(t_ack_r), 2u) << "the lie was told";
+  EXPECT_TRUE(w.bobApp().hasStatus(id, UserStatus::ON_RADIO)) << "the lie covers ON_RADIO as well\n" << w.trace(id);
+  EXPECT_FALSE(w.bobApp().hasStatus(id, UserStatus::DELIVERED)) << w.trace(id);
+
+  const uint64_t t_random = w.s.now();
+  w.memBackend(0).setLie(MemMailboxBackend::Lie::DELIVERED_WITH_RANDOM);
+  w.runFor(2 * DAY);
+  EXPECT_GE(lies(t_random), 1u);
+  EXPECT_FALSE(w.bobApp().hasStatus(id, UserStatus::DELIVERED)) << w.trace(id);
+  EXPECT_EQ(0u, w.aliceApp().inboxCount(text));
+
+  w.aliceApp().connect();
+  ASSERT_TRUE(w.runUntil([&] { return w.bobApp().hasStatus(id, UserStatus::DELIVERED); }, 3 * DAY)) << w.trace(id);
+  EXPECT_EQ(S({ UserStatus::QUEUED, UserStatus::CUSTODY, UserStatus::ON_RADIO, UserStatus::DELIVERED }),
+            w.bobApp().statuses(id));
+  EXPECT_EQ(1u, w.aliceApp().inboxCount(text));
 }

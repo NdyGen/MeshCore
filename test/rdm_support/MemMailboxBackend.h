@@ -16,6 +16,9 @@ public:
     NO_REPLY,   // Pi absent: requests are dropped without a reply or state change (scenario 9a)
     WITHHOLD    // FETCH never carries a copy and reports remaining 0 (scenario 9b)
   };
+  // A malicious M (R5): STATUS says DELIVERED for every message it has not seen synced, with the ACK_R from Alice's
+  // report (the best M knows) or with random bytes. Everything else stays honest.
+  enum class Lie : uint8_t { NONE, DELIVERED_WITH_ACK_R, DELIVERED_WITH_RANDOM };
   enum class MsgState : uint8_t { STORED, SENT, ON_RADIO, DELIVERED, REJECTED, EXPIRED, SYNC_EXPIRED };
 
   static const uint32_t DAY_S    = 86400;
@@ -43,6 +46,7 @@ public:
   void setTime(uint32_t now) { _now = now; }
   void setTimeSource(std::function<uint32_t()> fn) { _time_fn = fn; }
   void setMode(Mode m) { _mode = m; }
+  void setLie(Lie l) { _lie = l; }
   void setReady(bool r) { _ready = r; }
 
   bool     messageState(const uint8_t pkt_hash[8], MsgState& out) const;
@@ -97,6 +101,8 @@ private:
   uint32_t _acl_seq = 0;
   uint32_t _requests = 0;
   Mode     _mode = Mode::NORMAL;
+  Lie      _lie = Lie::NONE;
+  uint32_t _lie_rng = 0x9E3779B9u;
   bool     _ready = true;
 
   uint32_t   now() const { return _time_fn ? _time_fn() : _now; }

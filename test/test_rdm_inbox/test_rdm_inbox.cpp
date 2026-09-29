@@ -300,6 +300,19 @@ TEST_F(InboxTest, TornInboxWriteGivesNoAck) {
   EXPECT_EQ(query(alice, 100, "torn").state, QueryState::UNKNOWN);
 }
 
+// Only the inbox write fails, the register write would succeed: still no ACK_R for a message that is not stored (#3518).
+TEST_F(InboxTest, InboxWriteFailureAloneGivesNoAck) {
+  io.fail_path = INBOX_PATH;
+  RecvDecision d = recv(alice, 100, "not stored");
+  EXPECT_EQ(d.result, RecvResult::STORE_ERROR);
+  EXPECT_FALSE(d.send_ack_r);
+  EXPECT_EQ(host.changed, 0);
+  EXPECT_EQ(inbox->freeSlots(), in_slots);
+  io.fail_path.clear();
+  EXPECT_EQ(query(alice, 100, "not stored").state, QueryState::UNKNOWN) << "sender keeps retrying";
+  EXPECT_EQ(recv(alice, 100, "not stored").result, RecvResult::NEW);
+}
+
 TEST_F(InboxTest, RegisterWriteFailureRollsBackTheInboxRecord) {
   io.fail_path = REG_PATH;
   RecvDecision d = recv(alice, 100, "half");
