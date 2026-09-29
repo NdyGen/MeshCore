@@ -57,6 +57,18 @@ void BaseChatMesh::sendAckTo(const ContactInfo& dest, const uint8_t* ack_hash, u
   }
 }
 
+#ifdef WITH_RELIABLE_DM
+ContactInfo* BaseChatMesh::rdmMatchedPeer(int sender_idx) {
+  if (sender_idx < 0 || sender_idx >= MAX_SEARCH_RESULTS) return NULL;
+  int i = matching_peer_indexes[sender_idx];
+  return (i >= 0 && i < num_contacts) ? &contacts[i] : NULL;
+}
+
+void BaseChatMesh::rdmSendAckTo(const ContactInfo& dest, const uint8_t* ack, uint8_t len) {
+  sendAckTo(dest, ack, len);
+}
+#endif
+
 void BaseChatMesh::bootstrapRTCfromContacts() {
   uint32_t latest = 0;
   for (int i = 0; i < num_contacts; i++) {

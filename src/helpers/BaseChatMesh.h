@@ -147,6 +147,10 @@ protected:
 
   // Connections
   bool startConnection(const ContactInfo& contact, uint16_t keep_alive_secs);
+#ifdef WITH_RELIABLE_DM
+  ContactInfo* rdmMatchedPeer(int sender_idx);                                   // contacts[matching_peer_indexes[i]]
+  void rdmSendAckTo(const ContactInfo& dest, const uint8_t* ack, uint8_t len);    // calls sendAckTo
+#endif
   void stopConnection(const uint8_t* pub_key);
   bool hasConnectionTo(const uint8_t* pub_key);
   void markConnectionActive(const ContactInfo& contact);

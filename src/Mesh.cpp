@@ -487,7 +487,12 @@ Packet* Mesh::createPathReturn(const uint8_t* dest_hash, const uint8_t* secret, 
 
 Packet* Mesh::createDatagram(uint8_t type, const Identity& dest, const uint8_t* secret, const uint8_t* data, size_t data_len) {
   if (type == PAYLOAD_TYPE_TXT_MSG || type == PAYLOAD_TYPE_REQ || type == PAYLOAD_TYPE_RESPONSE) {
+#if defined(WITH_RELIABLE_DM) || defined(WITH_DM_MAILBOX)
+    if (PATH_HASH_SIZE * 2 + CIPHER_MAC_SIZE + ((data_len + CIPHER_BLOCK_SIZE - 1) / CIPHER_BLOCK_SIZE) * CIPHER_BLOCK_SIZE
+        > MAX_PACKET_PAYLOAD) return NULL;
+#else
     if (data_len + CIPHER_MAC_SIZE + CIPHER_BLOCK_SIZE-1 > MAX_PACKET_PAYLOAD) return NULL;
+#endif
   } else {
     return NULL;  // invalid type
   }
