@@ -5,21 +5,13 @@
 
 use std::fmt;
 
-use crate::types::{
-    Ack, Code, KOwner, Owner4, PktHash, Pubkey, ReportResult, RequestId, Role, Token, UnixTime,
-};
+pub use crate::types::Report;
+use crate::types::{Ack, Code, KOwner, Owner4, PktHash, Pubkey, RequestId, Role, Token, UnixTime};
 
 pub const REQUEST_PREFIX: &str = "@MBX ";
 /// Most reports in one FETCH and hashes in one STAT.
 pub const MAX_BATCH: usize = 8;
 pub const FETCH_FLAG_NO_PAYLOAD: u8 = 0x02;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Report {
-    pub pkt_hash: PktHash,
-    pub result: ReportResult,
-    pub ack: Ack,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
@@ -432,6 +424,7 @@ impl fmt::Display for Request {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ReportResult;
 
     const Z32: &str = "0000000000000000000000000000000000000000000000000000000000000000";
     const Z8: &str = "0000000000000000";

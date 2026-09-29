@@ -138,6 +138,14 @@ impl From<ReportResult> for u8 {
     }
 }
 
+/// Alice's report on one copy, carried in her next FETCH.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Report {
+    pub pkt_hash: PktHash,
+    pub result: ReportResult,
+    pub ack: Ack,
+}
+
 /// State of a deposited message. `Sent` is internal: on the wire it reads as STORED.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum State {

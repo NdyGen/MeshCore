@@ -8,5 +8,6 @@
 //! - [`session`]: one radio session: lines in, replies out, a reply only after its commit.
 //! - [`system`], [`transport`], [`cli`]: clock, randomness, stdio and serial port, command line.
 
+pub mod domain;
 pub mod protocol;
 pub mod types;
