@@ -2,11 +2,13 @@
 
 #include <Mesh.h>
 #include <helpers/TransportKeyStore.h>
+#include <helpers/rdm/RdmConfig.h>
 #include <helpers/rdm/mailbox/MailboxCore.h>
 
 #ifndef MBX_PEER_CACHE_SIZE
-  #define MBX_PEER_CACHE_SIZE  64
+  #define MBX_PEER_CACHE_SIZE  RDM_MBX_CLIENTS
 #endif
+static_assert(MBX_PEER_CACHE_SIZE == RDM_MBX_CLIENTS, "MailboxCore rate-limits exactly the peers the cache can decrypt");
 #ifndef MBX_FLOOD_ADVERT_INTERVAL_S
   #define MBX_FLOOD_ADVERT_INTERVAL_S  (12UL * 3600)
 #endif

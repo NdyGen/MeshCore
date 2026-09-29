@@ -19,8 +19,6 @@ namespace {
 const uint32_t NEVER       = 0xFFFFFFFFUL;
 const uint16_t RECORD_SIZE = 201;
 const uint16_t WATCH_SIZE  = 28;
-const uint32_t RETRY_AFTER_LOSS_S = 86400;   // decision WP3: at least a day more after M or Alice lost the copy
-const uint32_t T_MAX_CUSTODY_S = 30UL * 86400;   // G10: M's ttl_s, at most 30 days
 
 // All outbox transmissions share one 60 s gap, so REQs to one mailbox are never closer than RDM_MBX_REQ_GAP_S.
 static_assert(RDM_OUTBOX_TX_GAP_S >= RDM_MBX_REQ_GAP_S, "outbox gap must cover the mailbox REQ gap");
@@ -390,7 +388,7 @@ void Outbox::releaseIfReported(uint8_t i) {
 void Outbox::leaveCopy(Slot& s, uint32_t now) {
   if (s.e.state != OutState::CUSTODY && s.e.state != OutState::ON_RADIO) return;
   uint32_t t_radio = addT(s.e.created, RDM_T_RADIO_S);
-  uint32_t min_end = addT(now, RETRY_AFTER_LOSS_S);
+  uint32_t min_end = addT(now, RDM_RETRY_AFTER_LOSS_S);
   s.e.deadline = t_radio > min_end ? t_radio : min_end;
 }
 
@@ -441,7 +439,7 @@ void Outbox::enterCustody(uint8_t i, uint32_t ttl_s, uint32_t now) {
   s.t_status = now + jittered(SCHED_STATUS[0]);
   s.t_query = now + jittered(RDM_CUSTODY_PROBE_S);
   s.e.flags |= OF_MBX_COPY;
-  s.e.deadline = now + (ttl_s < T_MAX_CUSTODY_S ? ttl_s : T_MAX_CUSTODY_S) + RDM_CUSTODY_GRACE_S;   // G10
+  s.e.deadline = now + (ttl_s < RDM_T_MAX_CUSTODY_S ? ttl_s : RDM_T_MAX_CUSTODY_S) + RDM_CUSTODY_GRACE_S;   // G10
   setState(i, OutState::CUSTODY, now);
 }
 
