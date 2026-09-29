@@ -1,6 +1,6 @@
 #pragma once
 
-#include "RdmTypes.h"
+#include <helpers/rdm/RdmTypes.h>
 
 namespace rdm {
 

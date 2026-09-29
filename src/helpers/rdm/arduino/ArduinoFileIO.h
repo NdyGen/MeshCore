@@ -1,8 +1,8 @@
 #pragma once
 
-#ifdef ARDUINO
+#if defined(ARDUINO) || defined(RDM_SIM_FS)
 
-#include "RdmStorage.h"
+#include <helpers/rdm/RdmStorage.h>
 
 #if defined(ESP32) || defined(RP2040_PLATFORM)
   #include <FS.h>

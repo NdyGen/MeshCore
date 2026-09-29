@@ -1,6 +1,3 @@
-// Only in builds with reliable DM; the mailbox build (WITH_DM_MAILBOX alone) compiles helpers/rdm/*.cpp too.
-#ifdef WITH_RELIABLE_DM
-
 #include "RdmNode.h"
 
 #include "RdmCodec.h"
@@ -707,5 +704,3 @@ bool Node::sendFetch(uint8_t flags, uint32_t store_id, const Report* r, uint8_t 
 }
 
 }
-
-#endif

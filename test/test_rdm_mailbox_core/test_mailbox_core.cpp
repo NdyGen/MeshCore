@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include <helpers/rdm/MailboxCore.h>
+#include <helpers/rdm/mailbox/MailboxCore.h>
 #include <helpers/rdm/RdmCodec.h>
 #include <helpers/rdm/RdmConfig.h>
 #include <helpers/rdm/RdmCrypto.h>

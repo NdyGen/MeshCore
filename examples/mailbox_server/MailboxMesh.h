@@ -2,7 +2,7 @@
 
 #include <Mesh.h>
 #include <helpers/TransportKeyStore.h>
-#include <helpers/rdm/MailboxCore.h>
+#include <helpers/rdm/mailbox/MailboxCore.h>
 
 #ifndef MBX_PEER_CACHE_SIZE
   #define MBX_PEER_CACHE_SIZE  64

@@ -1,4 +1,4 @@
-#ifdef ARDUINO
+#if defined(ARDUINO) || defined(RDM_SIM_FS)
 
 #include "ArduinoFileIO.h"
 
