@@ -1,0 +1,536 @@
+{
+  "version": 1,
+  "description": "Mailbox conformance vectors (06-implementatieplan-v1.md par. 3.17). Run by examples/mailbox_server/mbxd/test_mbxd.py and test/test_rdm_mailbox_conformance. Rules: examples/mailbox_server/mbxd/README.md.",
+  "format": {
+    "t": "mailbox clock in seconds (unix time); steps are ordered, housekeeping runs at t before each op",
+    "id": "request id is the step index within the case",
+    "owner_add": "args pub(32 hex), k_owner(16 hex), ttl_days, sync_days, quota; owner prefix = pub[0:4]",
+    "deny": "args owner(4 hex), pub(32 hex)",
+    "reg": "args sender, owner, token; expect code, ttl_days, quota",
+    "store": "args owner, sender, hash, payload (hex); expect code, expires",
+    "fetch": "args client, flags, store_id (4 hex), reports[{hash, result, ack}]; expect code, remaining, reports_ok, payload (hex or null)",
+    "stat": "args sender, hashes; expect code, items[{state, ack}]",
+    "advance": "only moves the clock to t and runs housekeeping"
+  },
+  "cases": [
+    {
+      "name": "reg_valid_token",
+      "doc": "Valid token_B = HMAC(K_owner, sender)[0:8] gives OK with the owner's ttl and quota.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}}
+      ]
+    },
+    {
+      "name": "reg_custom_owner_limits",
+      "doc": "ttl_days and quota come from the owner row.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 3, "sync_days": 10, "quota": 5}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 3, "quota": 5}}
+      ]
+    },
+    {
+      "name": "reg_unknown_owner",
+      "doc": "No owner with that 4-byte prefix.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "deadbeef", "token": "dd052b2f712e4782"}, "expect": {"code": 17, "ttl_days": 0, "quota": 0}}
+      ]
+    },
+    {
+      "name": "reg_wrong_token",
+      "doc": "A token for another sender or from another owner key is rejected.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "k_owner": "34d1e0a76277659334b8560a940f1b62", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "b9db6f02c6f7b9f3"}, "expect": {"code": 16, "ttl_days": 0, "quota": 0}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "97f8a4e338795191"}, "expect": {"code": 16, "ttl_days": 0, "quota": 0}},
+        {"t": 1790000003, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}}
+      ]
+    },
+    {
+      "name": "reg_denied",
+      "doc": "A denylisted sender gets NOT_AUTH even with a valid token; other senders and owners are unaffected.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "k_owner": "34d1e0a76277659334b8560a940f1b62", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "deny", "args": {"owner": "535b31db", "pub": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d"}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 16, "ttl_days": 0, "quota": 0}},
+        {"t": 1790000003, "op": "reg", "args": {"sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "owner": "535b31db", "token": "b9db6f02c6f7b9f3"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000004, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "f36ab03b", "token": "97f8a4e338795191"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}}
+      ]
+    },
+    {
+      "name": "store_requires_registration",
+      "doc": "DEPOSIT from a sender that never registered with this owner is NOT_AUTH.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "k_owner": "34d1e0a76277659334b8560a940f1b62", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 16, "expires": 0}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "f36ab03b", "token": "97f8a4e338795191"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000003, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 16, "expires": 0}},
+        {"t": 1790000004, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000005, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604805}}
+      ]
+    },
+    {
+      "name": "store_unknown_owner",
+      "doc": "DEPOSIT for an owner prefix the Pi does not know.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000002, "op": "store", "args": {"owner": "deadbeef", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 17, "expires": 0}}
+      ]
+    },
+    {
+      "name": "store_expires_from_owner_ttl",
+      "doc": "expires = deposit time + ttl_days of the owner.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 3, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 3, "quota": 20}},
+        {"t": 1790000100, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790259300}}
+      ]
+    },
+    {
+      "name": "store_already_stored",
+      "doc": "Same pkt_hash again (lost DEPOSIT reply) gives ALREADY_STORED with the original expires.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000100, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604900}},
+        {"t": 1790000200, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 1, "expires": 1790604900}},
+        {"t": 1790000300, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}}
+      ]
+    },
+    {
+      "name": "store_same_hash_other_sender",
+      "doc": "A pkt_hash that belongs to another sender is not acknowledged.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "owner": "535b31db", "token": "b9db6f02c6f7b9f3"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "store", "args": {"owner": "535b31db", "sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 16, "expires": 0}}
+      ]
+    },
+    {
+      "name": "store_too_big",
+      "doc": "Inner payload above 164 bytes is TOO_BIG; exactly 164 fits.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8a1101e1890504aa", "payload": "e949c3cfc3bcfa7b0e20c2a58b43d80ce23425709e6b55bb27d8e0e7b2837d4e86c608d08366d96517c91f62cc1b382768e208aa6f3df9d588ee85d79c3931f3533e2429956dde754566cb17780fcbc982418b6806732c93c4aa286067e74ec3a0c53cfeb2782c2295a87f8bc897432d6d193c920da6559657938e27af26039242ca64942870808ebcc496138f6b5d11d68af4cbacdb0e93c930f2f478555ca9f384980e1a"}, "expect": {"code": 20, "expires": 0}},
+        {"t": 1790000020, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "d15678a6e1508944", "payload": "311607f9795b1bed961fdd27a0296c4a9cfb6f9fb0c821f84f2d09c2958ca692b34252add63590a4976f2e58543c083fb351662de46dda52ca5f9d7dc40fbe3012146e27fa5ab20066fe0cb2de442febb2b6debd11e2d048a57b26a85d16a6f24a504d80074aeaca50a8af7375d1a2541b020e5ff10962d9ef59799c66949478d9b2327507cc551abec5f6735741d0204f81801a8aaa4b6a1df8d26070ccf678e54535df"}, "expect": {"code": 0, "expires": 1790604820}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "311607f9795b1bed961fdd27a0296c4a9cfb6f9fb0c821f84f2d09c2958ca692b34252add63590a4976f2e58543c083fb351662de46dda52ca5f9d7dc40fbe3012146e27fa5ab20066fe0cb2de442febb2b6debd11e2d048a57b26a85d16a6f24a504d80074aeaca50a8af7375d1a2541b020e5ff10962d9ef59799c66949478d9b2327507cc551abec5f6735741d0204f81801a8aaa4b6a1df8d26070ccf678e54535df"}}
+      ]
+    },
+    {
+      "name": "store_quota",
+      "doc": "Quota counts live messages (STORED, SENT, ON_RADIO) per sender and owner; a final state frees it.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 2}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 2}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "owner": "535b31db", "token": "b9db6f02c6f7b9f3"}, "expect": {"code": 0, "ttl_days": 7, "quota": 2}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8434362624463c31", "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}, "expect": {"code": 0, "expires": 1790604820}},
+        {"t": 1790000030, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "d671fce92977ce0a", "payload": "c1b67cbd8d2d6f9394487b999f3722432346d66b7dd0db9c7d7a4b36e7813f26585344d75a793d8fe54339a7bf2933cedc3edf2b40f393093a55aa7f"}, "expect": {"code": 18, "expires": 0}},
+        {"t": 1790000040, "op": "store", "args": {"owner": "535b31db", "sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "hash": "2a36909cab146956", "payload": "7a84a53240f4e8773d39d584a6c97fb878a5f78ebebf2796d56c797ee8e7888be3c1db00d9b497e67a8f19b93ccf6db9e7b3280353753478ce15c553"}, "expect": {"code": 0, "expires": 1790604840}},
+        {"t": 1790000050, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 2, "reports_ok": 0, "payload": "7a84a53240f4e8773d39d584a6c97fb878a5f78ebebf2796d56c797ee8e7888be3c1db00d9b497e67a8f19b93ccf6db9e7b3280353753478ce15c553"}},
+        {"t": 1790000060, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "2a36909cab146956", "result": 0, "ack": "8f1615260000"}]}, "expect": {"code": 0, "remaining": 1, "reports_ok": 1, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000070, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "d671fce92977ce0a", "payload": "c1b67cbd8d2d6f9394487b999f3722432346d66b7dd0db9c7d7a4b36e7813f26585344d75a793d8fe54339a7bf2933cedc3edf2b40f393093a55aa7f"}, "expect": {"code": 18, "expires": 0}},
+        {"t": 1790000080, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 2, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 1, "ack": "9491652a1324"}]}, "expect": {"code": 0, "remaining": 1, "reports_ok": 1, "payload": null}},
+        {"t": 1790000090, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "d671fce92977ce0a", "payload": "c1b67cbd8d2d6f9394487b999f3722432346d66b7dd0db9c7d7a4b36e7813f26585344d75a793d8fe54339a7bf2933cedc3edf2b40f393093a55aa7f"}, "expect": {"code": 0, "expires": 1790604890}}
+      ]
+    },
+    {
+      "name": "store_after_deny",
+      "doc": "After deny the sender cannot deposit; messages already stored stay deliverable.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "deny", "args": {"owner": "535b31db", "pub": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d"}},
+        {"t": 1790000030, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8434362624463c31", "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}, "expect": {"code": 16, "expires": 0}},
+        {"t": 1790000040, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 16, "ttl_days": 0, "quota": 0}},
+        {"t": 1790000050, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 1, "ack": "000000000000"}]}},
+        {"t": 1790000060, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}}
+      ]
+    },
+    {
+      "name": "fetch_only_owner",
+      "doc": "FETCH is only answered for an owner pubkey; depositors and strangers get NOT_AUTH.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 16, "remaining": 0, "reports_ok": 0, "payload": null}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "639cca76ace9f69fc6628cd506dffb023ee83f010ab0497a252c9bfd1a2a65b4", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 16, "remaining": 0, "reports_ok": 0, "payload": null}},
+        {"t": 1790000040, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 1, "ack": "000000000000"}]}}
+      ]
+    },
+    {
+      "name": "fetch_flow_on_radio_synced",
+      "doc": "One copy per reply; reports move SENT to ON_RADIO and ON_RADIO to DELIVERED.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8434362624463c31", "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}, "expect": {"code": 0, "expires": 1790604820}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000031, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}]}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 0, "ack": "e8b381570000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}},
+        {"t": 1790000041, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 2, "ack": "e8b381570000"}, {"state": 1, "ack": "000000000000"}]}},
+        {"t": 1790000050, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 1, "ack": "9491652a1324"}, {"hash": "8434362624463c31", "result": 0, "ack": "667e15110000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 2, "payload": null}},
+        {"t": 1790000051, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 3, "ack": "9491652a1324"}, {"state": 2, "ack": "667e15110000"}]}},
+        {"t": 1790000060, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": null}}
+      ]
+    },
+    {
+      "name": "fetch_sent_without_report_back_to_stored",
+      "doc": "A copy that the next FETCH does not report is offered again.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000031, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 1, "ack": "000000000000"}]}}
+      ]
+    },
+    {
+      "name": "fetch_oldest_first_remaining",
+      "doc": "Copies go out oldest first; remaining counts STORED after this reply.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8434362624463c31", "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}, "expect": {"code": 0, "expires": 1790604820}},
+        {"t": 1790000030, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "d671fce92977ce0a", "payload": "c1b67cbd8d2d6f9394487b999f3722432346d66b7dd0db9c7d7a4b36e7813f26585344d75a793d8fe54339a7bf2933cedc3edf2b40f393093a55aa7f"}, "expect": {"code": 0, "expires": 1790604830}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 2, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000050, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 0, "ack": "e8b381570000"}]}, "expect": {"code": 0, "remaining": 1, "reports_ok": 1, "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}},
+        {"t": 1790000060, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 2, "store_id": "00000001", "reports": [{"hash": "8434362624463c31", "result": 0, "ack": "667e15110000"}]}, "expect": {"code": 0, "remaining": 1, "reports_ok": 1, "payload": null}},
+        {"t": 1790000070, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "c1b67cbd8d2d6f9394487b999f3722432346d66b7dd0db9c7d7a4b36e7813f26585344d75a793d8fe54339a7bf2933cedc3edf2b40f393093a55aa7f"}}
+      ]
+    },
+    {
+      "name": "fetch_rotates_senders",
+      "doc": "Oldest copy per sender, senders in pubkey order after the sender of the previous copy, wrapping around, so one sender above quota does not hold up the others.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "owner": "535b31db", "token": "b9db6f02c6f7b9f3"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000003, "op": "reg", "args": {"sender": "166432d299353b22cce20c8feb8129556ec4548b1ea1b1da82bbcf09e28d5479", "owner": "535b31db", "token": "771db84159edde60"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "01e0005bea7e3ede", "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000011, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "141469104d20dc2b", "payload": "4942f77b464458bdd9d85f972312db9300c43b3c129befa83d683f6c8fa63869067c5758f7eaccb6fd1354752bd609767f43a9902df288a9d239df7a"}, "expect": {"code": 0, "expires": 1790604811}},
+        {"t": 1790000012, "op": "store", "args": {"owner": "535b31db", "sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "hash": "2a36909cab146956", "payload": "7a84a53240f4e8773d39d584a6c97fb878a5f78ebebf2796d56c797ee8e7888be3c1db00d9b497e67a8f19b93ccf6db9e7b3280353753478ce15c553"}, "expect": {"code": 0, "expires": 1790604812}},
+        {"t": 1790000013, "op": "store", "args": {"owner": "535b31db", "sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "hash": "505e8b3a4f04939a", "payload": "a6fcaa6c30359abbfcf03d127ef24a838a2078e9be8d3d67ff03e0a034c3d36205b11bbcdf6d87d0a297b8830765ae76a0eac5973f2dc44da095fb63"}, "expect": {"code": 0, "expires": 1790604813}},
+        {"t": 1790000014, "op": "store", "args": {"owner": "535b31db", "sender": "166432d299353b22cce20c8feb8129556ec4548b1ea1b1da82bbcf09e28d5479", "hash": "ff749bc95627f238", "payload": "ea9ef5ae6049db7c5538987417927a248ac052f154ce47e7b8e616fd56999aea926ac3db0c7d080e48ba94dc9052d3753b59bc3e9aca0f2368deff17"}, "expect": {"code": 0, "expires": 1790604814}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 4, "reports_ok": 0, "payload": "7a84a53240f4e8773d39d584a6c97fb878a5f78ebebf2796d56c797ee8e7888be3c1db00d9b497e67a8f19b93ccf6db9e7b3280353753478ce15c553"}},
+        {"t": 1790000021, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "2a36909cab146956", "result": 0, "ack": "8f1615260000"}]}, "expect": {"code": 0, "remaining": 3, "reports_ok": 1, "payload": "ea9ef5ae6049db7c5538987417927a248ac052f154ce47e7b8e616fd56999aea926ac3db0c7d080e48ba94dc9052d3753b59bc3e9aca0f2368deff17"}},
+        {"t": 1790000022, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "ff749bc95627f238", "result": 0, "ack": "6ae69bdf0000"}]}, "expect": {"code": 0, "remaining": 2, "reports_ok": 1, "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}},
+        {"t": 1790000023, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "01e0005bea7e3ede", "result": 0, "ack": "6aa850c40000"}]}, "expect": {"code": 0, "remaining": 1, "reports_ok": 1, "payload": "a6fcaa6c30359abbfcf03d127ef24a838a2078e9be8d3d67ff03e0a034c3d36205b11bbcdf6d87d0a297b8830765ae76a0eac5973f2dc44da095fb63"}},
+        {"t": 1790000024, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "505e8b3a4f04939a", "result": 0, "ack": "9c6d74140000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": "4942f77b464458bdd9d85f972312db9300c43b3c129befa83d683f6c8fa63869067c5758f7eaccb6fd1354752bd609767f43a9902df288a9d239df7a"}},
+        {"t": 1790000025, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "141469104d20dc2b", "result": 0, "ack": "8deb7bcd0000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}}
+      ]
+    },
+    {
+      "name": "fetch_lost_copy_waits_its_turn",
+      "doc": "A copy without report goes back to STORED and comes again when its sender is next.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "owner": "535b31db", "token": "b9db6f02c6f7b9f3"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "01e0005bea7e3ede", "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000011, "op": "store", "args": {"owner": "535b31db", "sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "hash": "2a36909cab146956", "payload": "7a84a53240f4e8773d39d584a6c97fb878a5f78ebebf2796d56c797ee8e7888be3c1db00d9b497e67a8f19b93ccf6db9e7b3280353753478ce15c553"}, "expect": {"code": 0, "expires": 1790604811}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "7a84a53240f4e8773d39d584a6c97fb878a5f78ebebf2796d56c797ee8e7888be3c1db00d9b497e67a8f19b93ccf6db9e7b3280353753478ce15c553"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "01e0005bea7e3ede", "result": 0, "ack": "6aa850c40000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": "7a84a53240f4e8773d39d584a6c97fb878a5f78ebebf2796d56c797ee8e7888be3c1db00d9b497e67a8f19b93ccf6db9e7b3280353753478ce15c553"}}
+      ]
+    },
+    {
+      "name": "fetch_no_payload_keeps_rotation",
+      "doc": "A FETCH without a copy does not move the rotation.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "owner": "535b31db", "token": "b9db6f02c6f7b9f3"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "01e0005bea7e3ede", "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000011, "op": "store", "args": {"owner": "535b31db", "sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "hash": "2a36909cab146956", "payload": "7a84a53240f4e8773d39d584a6c97fb878a5f78ebebf2796d56c797ee8e7888be3c1db00d9b497e67a8f19b93ccf6db9e7b3280353753478ce15c553"}, "expect": {"code": 0, "expires": 1790604811}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 2, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 2, "reports_ok": 0, "payload": null}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "7a84a53240f4e8773d39d584a6c97fb878a5f78ebebf2796d56c797ee8e7888be3c1db00d9b497e67a8f19b93ccf6db9e7b3280353753478ce15c553"}}
+      ]
+    },
+    {
+      "name": "fetch_inbox_full",
+      "doc": "INBOX_FULL puts the copy back to STORED; NO_PAYLOAD returns only the count.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8434362624463c31", "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}, "expect": {"code": 0, "expires": 1790604820}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 2, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 4, "ack": "000000000000"}]}, "expect": {"code": 0, "remaining": 2, "reports_ok": 1, "payload": null}},
+        {"t": 1790000041, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 1, "ack": "000000000000"}]}},
+        {"t": 1790000050, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}}
+      ]
+    },
+    {
+      "name": "fetch_undecryptable_rejected",
+      "doc": "UNDECRYPTABLE (Alice does not know Bob) is final: REJECTED, never offered again.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 3, "ack": "000000000000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}},
+        {"t": 1790000031, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 4, "ack": "000000000000"}]}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": null}}
+      ]
+    },
+    {
+      "name": "fetch_duplicate_is_on_radio",
+      "doc": "DUPLICATE (Alice already had it directly) counts as ON_RADIO with ACK_R.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 2, "ack": "e8b381570000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}},
+        {"t": 1790000031, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 2, "ack": "e8b381570000"}]}}
+      ]
+    },
+    {
+      "name": "fetch_synced_from_sent",
+      "doc": "SYNCED may arrive before any ON_RADIO report.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 1, "ack": "9491652a1324"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}},
+        {"t": 1790000031, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 3, "ack": "9491652a1324"}]}}
+      ]
+    },
+    {
+      "name": "fetch_report_for_stored",
+      "doc": "An ON_RADIO report for a copy that was put back to STORED still counts: Alice has it.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 2, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": null}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 2, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 0, "ack": "e8b381570000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}},
+        {"t": 1790000041, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 2, "ack": "e8b381570000"}]}}
+      ]
+    },
+    {
+      "name": "fetch_invalid_transitions_ignored",
+      "doc": "Reports that do not fit the state change nothing but are confirmed.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000011, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8434362624463c31", "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}, "expect": {"code": 0, "expires": 1790604811}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 0, "ack": "e8b381570000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 2, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 3, "ack": "000000000000"}, {"hash": "78adf2d2bf59ab9a", "result": 4, "ack": "000000000000"}, {"hash": "8434362624463c31", "result": 1, "ack": "e2719c213e8d"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 3, "payload": null}},
+        {"t": 1790000050, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 2, "store_id": "00000001", "reports": [{"hash": "8434362624463c31", "result": 0, "ack": "667e15110000"}, {"hash": "8434362624463c31", "result": 3, "ack": "000000000000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 2, "payload": null}},
+        {"t": 1790000051, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 2, "ack": "e8b381570000"}, {"state": 3, "ack": "e2719c213e8d"}]}}
+      ]
+    },
+    {
+      "name": "fetch_reports_unknown_or_foreign_confirmed",
+      "doc": "Reports for unknown hashes or for another owner's messages are confirmed and change nothing.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "k_owner": "34d1e0a76277659334b8560a940f1b62", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "flags": 0, "store_id": "00000002", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 0, "ack": "e8b381570000"}, {"hash": "4e759a421025cb17", "result": 1, "ack": "32379e1fade9"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 2, "payload": null}},
+        {"t": 1790000021, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 1, "ack": "000000000000"}]}}
+      ]
+    },
+    {
+      "name": "fetch_owners_isolated",
+      "doc": "An owner only receives copies deposited for that owner.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "k_owner": "34d1e0a76277659334b8560a940f1b62", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "f36ab03b", "token": "97f8a4e338795191"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "f36ab03b", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "01e0005bea7e3ede", "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "a569ab4d70bead9c", "payload": "418d71344a3944a7c3fa0b42738d3751cf083419d4b6631db856f0962b31535131a7cdac2cf335e8811ca6180fa12b4b8e890fa2917cd189ea857311"}, "expect": {"code": 0, "expires": 1790604820}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "418d71344a3944a7c3fa0b42738d3751cf083419d4b6631db856f0962b31535131a7cdac2cf335e8811ca6180fa12b4b8e890fa2917cd189ea857311"}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "flags": 0, "store_id": "0000000b", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}}
+      ]
+    },
+    {
+      "name": "resync_redelivers_on_radio",
+      "doc": "A FETCH with another store_id than the previous one puts ON_RADIO and SENT back to STORED (G12).",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000011, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8434362624463c31", "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}, "expect": {"code": 0, "expires": 1790604811}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "aaaa0001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "aaaa0001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 0, "ack": "e8b381570000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "bbbb0002", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000041, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}]}},
+        {"t": 1790000050, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "bbbb0002", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 0, "ack": "e8b381570000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}},
+        {"t": 1790000051, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 2, "ack": "e8b381570000"}]}}
+      ]
+    },
+    {
+      "name": "resync_restarts_t_radio",
+      "doc": "A message put back to STORED by a resync gets a new T_radio from that moment (G12).",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000011, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8434362624463c31", "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}, "expect": {"code": 0, "expires": 1790604811}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "aaaa0001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "aaaa0001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 0, "ack": "e8b381570000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}},
+        {"t": 1790518400, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 2, "store_id": "bbbb0002", "reports": []}, "expect": {"code": 0, "remaining": 2, "reports_ok": 0, "payload": null}},
+        {"t": 1790604811, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}]}},
+        {"t": 1790604812, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 1, "expires": 1791123200}},
+        {"t": 1791123199, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}]}},
+        {"t": 1791123200, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 5, "ack": "000000000000"}, {"state": 5, "ack": "000000000000"}]}}
+      ]
+    },
+    {
+      "name": "resync_keeps_final",
+      "doc": "DELIVERED has no ciphertext left and stays DELIVERED after a resync.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "aaaa0001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "aaaa0001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 1, "ack": "9491652a1324"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "cccc0003", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": null}},
+        {"t": 1790000041, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 3, "ack": "9491652a1324"}]}}
+      ]
+    },
+    {
+      "name": "resync_per_owner",
+      "doc": "store_id is tracked per owner.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "k_owner": "34d1e0a76277659334b8560a940f1b62", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "f36ab03b", "token": "97f8a4e338795191"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "a569ab4d70bead9c", "payload": "418d71344a3944a7c3fa0b42738d3751cf083419d4b6631db856f0962b31535131a7cdac2cf335e8811ca6180fa12b4b8e890fa2917cd189ea857311"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000011, "op": "store", "args": {"owner": "f36ab03b", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "01e0005bea7e3ede", "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}, "expect": {"code": 0, "expires": 1790604811}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "418d71344a3944a7c3fa0b42738d3751cf083419d4b6631db856f0962b31535131a7cdac2cf335e8811ca6180fa12b4b8e890fa2917cd189ea857311"}},
+        {"t": 1790000021, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "a569ab4d70bead9c", "result": 0, "ack": "dfde3d720000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "flags": 0, "store_id": "00000002", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": null}},
+        {"t": 1790000041, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["a569ab4d70bead9c"]}, "expect": {"code": 0, "items": [{"state": 2, "ack": "dfde3d720000"}]}}
+      ]
+    },
+    {
+      "name": "t_radio_expiry",
+      "doc": "STORED and SENT expire at expires (T_radio); the copy is no longer offered.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8434362624463c31", "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}, "expect": {"code": 0, "expires": 1790604820}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790604809, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}]}},
+        {"t": 1790604810, "op": "advance", "args": {}},
+        {"t": 1790604810, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 5, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}]}},
+        {"t": 1790604820, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": null}},
+        {"t": 1790604821, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 5, "ack": "000000000000"}]}}
+      ]
+    },
+    {
+      "name": "t_sync_expiry",
+      "doc": "ON_RADIO without SYNCED report becomes SYNC_EXPIRED after sync_days; ACK_R stays available.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000100, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 0, "ack": "e8b381570000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}},
+        {"t": 1792592099, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 2, "ack": "e8b381570000"}]}},
+        {"t": 1792592100, "op": "advance", "args": {}},
+        {"t": 1792592100, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 6, "ack": "e8b381570000"}]}},
+        {"t": 1792592110, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 1, "ack": "9491652a1324"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}},
+        {"t": 1792592111, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 3, "ack": "9491652a1324"}]}}
+      ]
+    },
+    {
+      "name": "t_sync_owner_days",
+      "doc": "sync_days comes from the owner row.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 2, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 0, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 0, "ack": "e8b381570000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}},
+        {"t": 1790172830, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 6, "ack": "e8b381570000"}]}}
+      ]
+    },
+    {
+      "name": "final_states_removed_after_30_days",
+      "doc": "DELIVERED, REJECTED and EXPIRED rows are removed 30 days after the final state.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000011, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "8434362624463c31", "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}, "expect": {"code": 0, "expires": 1790604811}},
+        {"t": 1790000020, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 1, "reports_ok": 0, "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "78adf2d2bf59ab9a", "result": 1, "ack": "9491652a1324"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": "95b765a7c6c756b579673188bcb114163a21a8f42753329a5b5e4303c27288d5bffe05839dc2911993bf23e85e69350085a5c58d7149b67192820a83"}},
+        {"t": 1790000040, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "8434362624463c31", "result": 3, "ack": "000000000000"}]}, "expect": {"code": 0, "remaining": 0, "reports_ok": 1, "payload": null}},
+        {"t": 1792592029, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 3, "ack": "9491652a1324"}, {"state": 4, "ack": "000000000000"}]}},
+        {"t": 1792592030, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 0, "ack": "000000000000"}, {"state": 4, "ack": "000000000000"}]}},
+        {"t": 1792592040, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a", "8434362624463c31"]}, "expect": {"code": 0, "items": [{"state": 0, "ack": "000000000000"}, {"state": 0, "ack": "000000000000"}]}},
+        {"t": 1792592050, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1793196850}}
+      ]
+    },
+    {
+      "name": "expired_removed_after_30_days",
+      "doc": "EXPIRED counts from the moment it expired.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1793196809, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 5, "ack": "000000000000"}]}},
+        {"t": 1793196810, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 0, "ack": "000000000000"}]}}
+      ]
+    },
+    {
+      "name": "stat_only_own_messages",
+      "doc": "STATUS reveals only the asking sender's own messages; anything else is UNKNOWN.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000002, "op": "reg", "args": {"sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "owner": "535b31db", "token": "b9db6f02c6f7b9f3"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "78adf2d2bf59ab9a", "payload": "d6d2f9040d4100fbd2d3d2cac55f6a7d71e9cbc150c8095cf9bee7b206bb8fe652d65818798849de67c8149b60cde040d8b5ff9c9000015d6575490b"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000020, "op": "stat", "args": {"sender": "09def5d077d7a943fc896bfd867bd0fc94cac3e2e3c526a459e6d677da62301a", "hashes": ["78adf2d2bf59ab9a", "4e759a421025cb17"]}, "expect": {"code": 0, "items": [{"state": 0, "ack": "000000000000"}, {"state": 0, "ack": "000000000000"}]}},
+        {"t": 1790000021, "op": "stat", "args": {"sender": "639cca76ace9f69fc6628cd506dffb023ee83f010ab0497a252c9bfd1a2a65b4", "hashes": ["78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 0, "ack": "000000000000"}]}},
+        {"t": 1790000022, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["4e759a421025cb17", "78adf2d2bf59ab9a"]}, "expect": {"code": 0, "items": [{"state": 0, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}]}}
+      ]
+    },
+    {
+      "name": "stat_batch_of_eight",
+      "doc": "Up to eight hashes per STATUS, answered in order.",
+      "steps": [
+        {"t": 1790000000, "op": "owner_add", "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"t": 1790000001, "op": "reg", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}, "expect": {"code": 0, "ttl_days": 7, "quota": 20}},
+        {"t": 1790000010, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "72a3b3f61d72f7ca", "payload": "598a70bac2de8dfb63e0286c2206acd8201fef282e559878425bc9a64a30b69b34b8cae68e8a63484ef0af9080f80b205b778699a190e56529444bc2"}, "expect": {"code": 0, "expires": 1790604810}},
+        {"t": 1790000011, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "01e0005bea7e3ede", "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}, "expect": {"code": 0, "expires": 1790604811}},
+        {"t": 1790000012, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "141469104d20dc2b", "payload": "4942f77b464458bdd9d85f972312db9300c43b3c129befa83d683f6c8fa63869067c5758f7eaccb6fd1354752bd609767f43a9902df288a9d239df7a"}, "expect": {"code": 0, "expires": 1790604812}},
+        {"t": 1790000013, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "5f9740c7293ca650", "payload": "bc0e98c4d02cbf139cc70e85fdcbb1819103b1d7778c9426a775e353222e2f56538790e9c38670acc8f6eb1bf1bfb79b12164adcf08f7ada0f953ade"}, "expect": {"code": 0, "expires": 1790604813}},
+        {"t": 1790000014, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "4db7e44818267c8f", "payload": "6c482224ac1f9ca50af46964a29ea25a6a8a91b2b32720fb964629639e962f65b2854aea3526439c97dd0b3a780039a7447fc48a9f3a2f55ae99265b"}, "expect": {"code": 0, "expires": 1790604814}},
+        {"t": 1790000015, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "3420357d87040ddc", "payload": "dfce2166dae701d5f1aa52baec6867dab5e08d57fa1551fc9200dfa8a7c6e0a36c87962ba49d992b5e076702895b28b49f78021025771545fc535028"}, "expect": {"code": 0, "expires": 1790604815}},
+        {"t": 1790000016, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "3730eae6d24e90d9", "payload": "23a51fe0e30be3f58f970b24d027cde3e992662e75652b639c6616b55d1d537da755d7fd5de2386ad69be03004d9116c75ee56c9510829015738b76a"}, "expect": {"code": 0, "expires": 1790604816}},
+        {"t": 1790000017, "op": "store", "args": {"owner": "535b31db", "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hash": "4eafb3b9425fc76b", "payload": "9f83bef28c7989b27346dfa5bfc40594face69d839dcd1afa15460d4cad1955d54bd0f47f8060e046be417e7cb451810c20764eb78b11250bc3bd603"}, "expect": {"code": 0, "expires": 1790604817}},
+        {"t": 1790000030, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": []}, "expect": {"code": 0, "remaining": 7, "reports_ok": 0, "payload": "598a70bac2de8dfb63e0286c2206acd8201fef282e559878425bc9a64a30b69b34b8cae68e8a63484ef0af9080f80b205b778699a190e56529444bc2"}},
+        {"t": 1790000031, "op": "fetch", "args": {"client": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "flags": 0, "store_id": "00000001", "reports": [{"hash": "72a3b3f61d72f7ca", "result": 0, "ack": "c6cb99e10000"}]}, "expect": {"code": 0, "remaining": 6, "reports_ok": 1, "payload": "d3f2d1a9d44371bde0a281e8ed15ec3a8e648c47434d9f63c3167bfa9162168077430303d1eb718dcd041bcd93d3456561355248da9e302a84582cf4"}},
+        {"t": 1790000040, "op": "stat", "args": {"sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "hashes": ["72a3b3f61d72f7ca", "01e0005bea7e3ede", "141469104d20dc2b", "5f9740c7293ca650", "4db7e44818267c8f", "3420357d87040ddc", "3730eae6d24e90d9", "4eafb3b9425fc76b"]}, "expect": {"code": 0, "items": [{"state": 2, "ack": "c6cb99e10000"}, {"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}, {"state": 1, "ack": "000000000000"}]}}
+      ]
+    }
+  ]
+}
