@@ -44,6 +44,7 @@ void Fetcher::trigger(uint32_t now) {
 }
 
 bool Fetcher::send(uint32_t now, bool is_retry) {
+  if (!_host.canFetch()) return false;   // saves reading the register for a FETCH that cannot go out
   Report r[MAX_BATCH];
   uint8_t n = _inbox.pendingReports(r, MAX_BATCH);
   uint8_t flags = _inbox.freeSlots() == 0 ? FETCH_FLAG_NO_PAYLOAD : 0;

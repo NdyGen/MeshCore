@@ -688,6 +688,8 @@ bool Node::ownMailbox(uint8_t mbx_pub_out[32]) {
   return true;
 }
 
+bool Node::canFetch() { return _has_own_mbx && reqAllowed(_own_mbx); }
+
 bool Node::sendFetch(uint8_t flags, uint32_t store_id, const Report* r, uint8_t n, uint32_t& est_timeout_ms) {
   if (!_has_own_mbx) return false;
   uint8_t body[1 + 1 + 4 + 1 + MAX_BATCH * 15];

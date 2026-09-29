@@ -165,6 +165,7 @@ private:
   void onReportQueued() override;
   // FetcherHost
   bool ownMailbox(uint8_t mbx_pub_out[32]) override;
+  bool canFetch() override;
   bool sendFetch(uint8_t flags, uint32_t store_id, const Report* r, uint8_t n, uint32_t& est_timeout_ms) override;
 };
 
