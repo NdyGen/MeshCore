@@ -93,10 +93,6 @@ Report reportOf(const RegRecord& r) {
   return rep;
 }
 
-bool sameReport(const Report& a, const Report& b) {
-  return a.result == b.result && memcmp(a.pkt_hash, b.pkt_hash, 8) == 0 && memcmp(a.ack, b.ack, 6) == 0;
-}
-
 uint8_t regIdxFlags(const RegRecord& r) {
   return IX_USED | (r.state == REG_SYNCED ? IX_SYNCED : 0) | ((r.flags & RF_REPORT_PENDING) ? IX_PENDING : 0);
 }

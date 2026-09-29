@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 namespace rdm {
 
@@ -44,6 +45,10 @@ struct QueryItem   { uint32_t ts; uint8_t key[4]; };
 struct QueryReply  { QueryState state; uint8_t ack[6]; };      // ON_RADIO: ACK_R + 2 zero bytes; SYNCED: ACK_S
 struct Report      { uint8_t pkt_hash[8]; ReportResult result; uint8_t ack[6]; };
 struct StatusReply { MbxState state; uint8_t ack[6]; };
+
+inline bool sameReport(const Report& a, const Report& b) {
+  return a.result == b.result && memcmp(a.pkt_hash, b.pkt_hash, 8) == 0 && memcmp(a.ack, b.ack, 6) == 0;
+}
 
 inline UserStatus toUserStatus(OutState s) {                   // 03 par. 11, G1
   switch (s) {
