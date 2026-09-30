@@ -7,7 +7,7 @@
 #include <ChatNode.h>
 #include <SimFileIO.h>
 
-#include <helpers/rdm/RdmChatMesh.h>
+#include <helpers/rdm/mesh/RdmChatMesh.h>
 
 #include <string>
 #include <vector>

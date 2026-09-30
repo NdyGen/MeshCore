@@ -24,9 +24,13 @@ size_t buildAckR(uint8_t out[7], const uint8_t ack_r[4], uint8_t ext_attempt, ui
 bool   ackHasCap(const uint8_t* ack, size_t len);                  // len >= 7 && ack[6] == CAP_BYTE
 
 // CTRL (txt_type 8): ts(4) | 0x20 | sub(1) | version(1) | [mbx_pub(32) | token(8)]  -> 47 or 7 bytes
+constexpr size_t CTRL_INFO_LEN   = 47;
+constexpr size_t CTRL_REVOKE_LEN = 7;
 struct MbxInfo { uint8_t sub; uint8_t version; uint8_t mbx_pub[32]; uint8_t token[8]; };
 size_t buildCtrlPlain(uint8_t* out, uint32_t ts, const MbxInfo& info);
 bool   parseCtrlPlain(const uint8_t* data, size_t len, uint32_t& ts, MbxInfo& out);
+// CTRL plaintext around a body from sub onwards, as the outbox stores it (at most MAX_TEXT bytes)
+size_t ctrlPlainFromBody(uint8_t* out, uint32_t ts, const uint8_t* body, size_t len);
 
 // Registration (ANON_REQ plaintext): ts(4) | 0xFF | 'M' | version(1) | owner(4) | token(8)  -> 19 bytes
 size_t buildRegReq(uint8_t* out, uint32_t ts, const uint8_t owner[4], const uint8_t token[8]);

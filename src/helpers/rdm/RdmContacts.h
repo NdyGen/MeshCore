@@ -17,6 +17,9 @@ enum : uint8_t { CR_CAP = 0x01, CR_HAS_MBX = 0x02, CR_MBX_INFO_SENT = 0x04 };
 
 class ContactTable {
 public:
+  static constexpr uint16_t    RECORD_SIZE = 52;           // ContactRdm, packed
+  static constexpr const char* PATH = "/rdm/contacts";
+
   explicit ContactTable(RecordFile& file);
   bool        begin();
   ContactRdm* find(const uint8_t pub_prefix[6]);

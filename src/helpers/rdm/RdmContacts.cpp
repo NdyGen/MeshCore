@@ -4,8 +4,6 @@
 
 namespace rdm {
 
-static const uint16_t RECORD_SIZE = 52;
-
 static void encode(const ContactRdm& c, uint8_t* r) {
   memcpy(r, c.pub_prefix, 6);
   r[6] = c.flags;
@@ -26,6 +24,10 @@ static void decode(const uint8_t* r, ContactRdm& c) {
   memcpy(c.mbx_pub, &r[12], 32);
   memcpy(c.token, &r[44], 8);
 }
+
+// Out-of-class definitions for C++11 builds (nRF52): Node binds these members to references.
+constexpr uint16_t    ContactTable::RECORD_SIZE;
+constexpr const char* ContactTable::PATH;
 
 ContactTable::ContactTable(RecordFile& file) : _file(file) {
 }

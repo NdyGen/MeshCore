@@ -60,6 +60,11 @@ public:
 
 class Inbox {
 public:
+  static constexpr uint16_t    RECORD_SIZE = 188;          // InRecord, packed
+  static constexpr const char* PATH = "/rdm/inbox";
+  static constexpr uint16_t    REG_RECORD_SIZE = 36;       // RegRecord, packed
+  static constexpr const char* REG_PATH = "/rdm/register";
+
   Inbox(RecordFile& inbox, RecordFile& reg, ContactTable& contacts, InboxHost& host);
   bool         begin(bool& recreated_out);
   RecvDecision onMessage(const RecvInput& in, uint32_t now);

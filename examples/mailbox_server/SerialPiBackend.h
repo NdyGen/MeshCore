@@ -2,7 +2,7 @@
 
 #include <Dispatcher.h>
 #include <Stream.h>
-#include <helpers/rdm/MailboxCore.h>
+#include <helpers/rdm/mailbox/MailboxCore.h>
 
 // MailboxBackend over the serial line to mbxd on the Pi (06-implementatieplan-v1.md par. 3.16). Requests go out
 // as one '@MBX ...' line each; replies ('mbx.' lines) are read without blocking whenever the core polls. Other

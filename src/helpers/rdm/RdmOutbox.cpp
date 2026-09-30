@@ -17,10 +17,6 @@ namespace rdm {
 namespace {
 
 const uint32_t NEVER       = 0xFFFFFFFFUL;
-const uint16_t RECORD_SIZE = 201;
-const uint16_t WATCH_SIZE  = 28;
-const uint32_t RETRY_AFTER_LOSS_S = 86400;   // decision WP3: at least a day more after M or Alice lost the copy
-const uint32_t T_MAX_CUSTODY_S = 30UL * 86400;   // G10: M's ttl_s, at most 30 days
 
 // All outbox transmissions share one 60 s gap, so REQs to one mailbox are never closer than RDM_MBX_REQ_GAP_S.
 static_assert(RDM_OUTBOX_TX_GAP_S >= RDM_MBX_REQ_GAP_S, "outbox gap must cover the mailbox REQ gap");
@@ -108,6 +104,12 @@ bool beforeRadio(OutState s) { return s <= OutState::CUSTODY; }
 
 }
 
+// Out-of-class definitions for C++11 builds (nRF52): Node binds these members to references.
+constexpr uint16_t    Outbox::RECORD_SIZE;
+constexpr const char* Outbox::PATH;
+constexpr uint16_t    Outbox::WATCH_RECORD_SIZE;
+constexpr const char* Outbox::WATCH_PATH;
+
 Outbox::Outbox(RecordFile& file, RecordFile& watch, ContactTable& contacts, OutboxHost& host)
   : _file(file), _contacts(contacts), _host(host), _watch_file(watch), _n_slots(0), _n_watch(0), _tx_any(false),
     _last_fw_tx(0) {
@@ -135,10 +137,10 @@ void Outbox::markDm(Slot& s, uint32_t now) {
 bool Outbox::begin(uint32_t now) {
   _host.selfPub(_self);
   if (_file.open() == RecordFile::Open::FAILED || _file.payloadSize() != RECORD_SIZE) return false;
-  if (_watch_file.open() == RecordFile::Open::FAILED || _watch_file.payloadSize() != WATCH_SIZE) return false;
+  if (_watch_file.open() == RecordFile::Open::FAILED || _watch_file.payloadSize() != WATCH_RECORD_SIZE) return false;
   _n_slots = _file.slots() < RDM_OUTBOX_SLOTS_MAX ? (uint8_t)_file.slots() : (uint8_t)RDM_OUTBOX_SLOTS_MAX;
   _n_watch = _watch_file.slots() < RDM_WATCH_SLOTS_MAX ? (uint8_t)_watch_file.slots() : (uint8_t)RDM_WATCH_SLOTS_MAX;
-  uint8_t wbuf[WATCH_SIZE];
+  uint8_t wbuf[WATCH_RECORD_SIZE];
   for (uint8_t k = 0; k < _n_watch; k++) {
     WatchIdx& w = _watch[k];
     w.used = _watch_file.read(k, wbuf);
@@ -255,10 +257,8 @@ void Outbox::computeAcks(Slot& s) {
   const OutEntry& e = s.e;
   if (isCtrl(e)) {
     uint8_t plain[5 + MAX_TEXT];
-    put32(plain, e.ts);
-    plain[4] = TXT_TYPE_RDM_CTRL << 2;
-    memcpy(plain + 5, e.text, e.text_len);
-    crypto::ctrlAck(s.ack_r[0], plain, 5 + e.text_len, _self);
+    size_t n = codec::ctrlPlainFromBody(plain, e.ts, (const uint8_t*)e.text, e.text_len);
+    crypto::ctrlAck(s.ack_r[0], plain, n, _self);
     memset(s.ack_s, 0, sizeof(s.ack_s));
     return;
   }
@@ -390,7 +390,7 @@ void Outbox::releaseIfReported(uint8_t i) {
 void Outbox::leaveCopy(Slot& s, uint32_t now) {
   if (s.e.state != OutState::CUSTODY && s.e.state != OutState::ON_RADIO) return;
   uint32_t t_radio = addT(s.e.created, RDM_T_RADIO_S);
-  uint32_t min_end = addT(now, RETRY_AFTER_LOSS_S);
+  uint32_t min_end = addT(now, RDM_RETRY_AFTER_LOSS_S);
   s.e.deadline = t_radio > min_end ? t_radio : min_end;
 }
 
@@ -441,7 +441,7 @@ void Outbox::enterCustody(uint8_t i, uint32_t ttl_s, uint32_t now) {
   s.t_status = now + jittered(SCHED_STATUS[0]);
   s.t_query = now + jittered(RDM_CUSTODY_PROBE_S);
   s.e.flags |= OF_MBX_COPY;
-  s.e.deadline = now + (ttl_s < T_MAX_CUSTODY_S ? ttl_s : T_MAX_CUSTODY_S) + RDM_CUSTODY_GRACE_S;   // G10
+  s.e.deadline = now + (ttl_s < RDM_T_MAX_CUSTODY_S ? ttl_s : RDM_T_MAX_CUSTODY_S) + RDM_CUSTODY_GRACE_S;   // G10
   setState(i, OutState::CUSTODY, now);
 }
 
@@ -925,7 +925,7 @@ void Outbox::addWatch(const Slot& s, uint32_t now) {
     }
     if (_watch[k].expires < _watch[idx].expires) idx = k;
   }
-  uint8_t buf[WATCH_SIZE];
+  uint8_t buf[WATCH_RECORD_SIZE];
   uint32_t expires = addT(now, RDM_WATCH_S);
   memcpy(buf, s.ack_s, 6);
   put32(buf + 6, expires);
@@ -947,7 +947,7 @@ bool Outbox::matchWatch(const uint8_t* ack_s, uint32_t now) {
   for (uint8_t k = 0; k < _n_watch; k++) {
     WatchIdx& w = _watch[k];
     if (!w.used || memcmp(w.ack_s, ack_s, 6) != 0) continue;
-    uint8_t buf[WATCH_SIZE];
+    uint8_t buf[WATCH_RECORD_SIZE];
     bool have = _watch_file.read(k, buf);
     w.used = false;
     _watch_file.erase(k);

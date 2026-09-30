@@ -1,6 +1,6 @@
 #pragma once
 
-#include <helpers/rdm/MailboxCore.h>
+#include <helpers/rdm/mailbox/MailboxCore.h>
 
 #include <deque>
 #include <functional>

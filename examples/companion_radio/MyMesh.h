@@ -88,7 +88,7 @@ struct AdvertPath {
 };
 
 #ifdef WITH_RELIABLE_DM   // reliable DM, docs/reliable-dm/06-implementatieplan-v1.md (WP6)
-#include <helpers/rdm/RdmChatMesh.h>
+#include <helpers/rdm/mesh/RdmChatMesh.h>
 #include "RdmCompanionProto.h"
 
 #ifndef RDM_FRAME_QUEUE_SIZE

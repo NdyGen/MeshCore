@@ -55,9 +55,9 @@ Principes:
 
 ## 3. Vastgelegde interfaces
 
-Recordgroottes gelden voor de gepakte serialisatie: implementaties schrijven records veld voor veld (little-endian), nooit via `memcpy` van een struct, zodat compiler-padding het bestandsformaat niet raakt.
+Recordgroottes gelden voor de gepakte serialisatie: implementaties schrijven records veld voor veld (little-endian), nooit via `memcpy` van een struct, zodat compiler-padding het bestandsformaat niet raakt. Elke module die een bestand bezit, exporteert de recordgrootte en het pad in zijn header (`RECORD_SIZE`, `PATH`; bij twee bestanden ook `WATCH_*`/`REG_*`, bij `Node` `MBX_*`); `Node` plant en opent de bestanden daarmee, de module controleert in `begin` de `payloadSize()` ertegen.
 
-Alle headers in `src/helpers/rdm/`, namespace `rdm`, `#pragma once`, alleen `<stdint.h>`, `<stddef.h>`, `<string.h>` en andere rdm-headers als include (uitzondering: `RdmChatMesh.h`, `ArduinoFileIO.h`). Little-endian op de wire. WP0 schrijft deze headers exact zoals hieronder; implementerende WP's wijzigen de public API en de struct-velden niet. Het `private`-deel van een klasse bevat in de headers alleen de referenties uit de constructor (en bij `Node` de host-overrides, zie 3.11); de implementerende WP mag daar leden aan toevoegen. Codecommentaar in de headers is Engels, zoals in de rest van de codebase.
+Kernheaders in `src/helpers/rdm/`, de integratielaag in `mesh/`, de platformadapter in `arduino/` en de serverrol in `mailbox/` (par. 4); namespace `rdm`, `#pragma once`, alleen `<stdint.h>`, `<stddef.h>`, `<string.h>` en andere rdm-headers als include (uitzondering: `mesh/RdmChatMesh.h`, `arduino/ArduinoFileIO.h`). Headers in een submap includen als `<helpers/rdm/...>`, zoals upstream. `RdmBytes.h` (little-endian `put16/get16/put32/get32`, `isZero`) en `RdmPolicy.h` (`jitterMax`, `jittered`, `firstRetryDelay`, `waitSecs`) zijn interne hulpheaders van de kern en staan niet in deze paragraaf. Little-endian op de wire. WP0 schrijft deze headers exact zoals hieronder; implementerende WP's wijzigen de public API en de struct-velden niet. Het `private`-deel van een klasse bevat in de headers alleen de referenties uit de constructor (en bij `Node` de host-overrides, zie 3.11); de implementerende WP mag daar leden aan toevoegen. Codecommentaar in de headers is Engels, zoals in de rest van de codebase.
 
 ### 3.1 `RdmTypes.h`
 
@@ -104,6 +104,10 @@ struct QueryReply  { QueryState state; uint8_t ack[6]; };      // ON_RADIO: ACK_
 struct Report      { uint8_t pkt_hash[8]; ReportResult result; uint8_t ack[6]; };
 struct StatusReply { MbxState state; uint8_t ack[6]; };
 
+inline bool sameReport(const Report& a, const Report& b) {
+  return a.result == b.result && memcmp(a.pkt_hash, b.pkt_hash, 8) == 0 && memcmp(a.ack, b.ack, 6) == 0;
+}
+
 inline UserStatus toUserStatus(OutState s) {                   // 03 par. 11, G1
   switch (s) {
     case OutState::CUSTODY:        return UserStatus::CUSTODY;
@@ -123,7 +127,7 @@ inline bool isFinal(OutState s) { return s >= OutState::ON_RADIO_FINAL; }
 
 ### 3.2 `RdmConfig.h`
 
-Alle waarden zijn `#ifndef`-overschrijfbaar (tests, kleine borden). Tijden in seconden RDM-tijd.
+Slotmaxima, `RDM_MIN_FREE_BYTES` en `RDM_MBX_CLIENTS` zijn `#ifndef`-overschrijfbaar (tests, kleine borden). Tijden in seconden RDM-tijd. Parameters die aan twee kanten van een contract gelden (client en mailbox) staan hier samen, met een `static_assert` op hun verhouding.
 
 ```cpp
 #ifndef RDM_OUTBOX_SLOTS_MAX
@@ -150,6 +154,8 @@ Alle waarden zijn `#ifndef`-overschrijfbaar (tests, kleine borden). Tijden in se
 #define RDM_WATCH_S               (90UL * 86400)
 #define RDM_FINAL_KEEP_S          86400        // G2, default D3
 #define RDM_CUSTODY_GRACE_S       86400        // G10
+#define RDM_T_MAX_CUSTODY_S       (30UL * 86400)   // G10: ttl_s van M, hooguit 30 dagen
+#define RDM_RETRY_AFTER_LOSS_S    86400        // besluit WP3: minstens een dag extra nadat M of Alice de kopie verloor
 #define RDM_WAIT_ACK_MIN_S        30           // G3: max(2 x est_timeout, 30 s)
 #define RDM_OUTBOX_TX_GAP_S       60
 #define RDM_BOOT_KICK_MIN_S       60           // G6
@@ -159,7 +165,11 @@ Alle waarden zijn `#ifndef`-overschrijfbaar (tests, kleine borden). Tijden in se
 #define RDM_MBX_ADVERT_MIN_S      600
 #define RDM_FETCH_INTERVAL_S      3600
 #define RDM_FETCH_BOOT_JITTER_S   60
-#define RDM_MBX_REQ_GAP_S         6            // min. tijd tussen REQ's naar één mailbox (MailboxCore: 1 per 5 s, + 1 s)
+#define RDM_MBX_REQ_GAP_S         6            // min. tijd tussen REQ's naar één mailbox: de gap van de server + 1 s
+#define RDM_MBX_SERVER_REQ_GAP_S  5            // MailboxCore accepteert 1 REQ per 5 s per client (03 par. 5)
+#ifndef RDM_MBX_CLIENTS
+  #define RDM_MBX_CLIENTS         64           // clients die een mailbox bijhoudt: peer-cache en rate-limits van MailboxCore
+#endif
 #define RDM_INBOX_QUOTA_DIV       4            // max 1/4 van de inbox per afzender (K8)
 // schema's (03 par. 5), in seconden na het vorige ijkpunt; laatste waarde herhaalt
 #define RDM_SCHED_DM_BACKOFF      { 300, 900, 3600, 14400, 43200, 86400 }
@@ -175,6 +185,8 @@ Alle waarden zijn `#ifndef`-overschrijfbaar (tests, kleine borden). Tijden in se
 #define RDM_RETRY_FIRST_MAX_S     120
 #define RDM_JITTER_MAX_S          60           // G17: elke herhalende tussenpoos I wordt I + U[0, min(I / RDM_JITTER_DIV, RDM_JITTER_MAX_S)]
 #define RDM_JITTER_DIV            10
+
+static_assert(RDM_MBX_REQ_GAP_S > RDM_MBX_SERVER_REQ_GAP_S, "a client REQ must never hit the mailbox's rate limit");
 ```
 
 ### 3.3 `RdmCrypto.h`
@@ -221,9 +233,13 @@ size_t buildAckR(uint8_t out[7], const uint8_t ack_r[4], uint8_t ext_attempt, ui
 bool   ackHasCap(const uint8_t* ack, size_t len);                  // len >= 7 && ack[6] == CAP_BYTE
 
 // CTRL (txt_type 8): ts(4) | 0x20 | sub(1) | versie(1) | [mbx_pub(32) | token(8)]  -> 47 of 7 bytes
+constexpr size_t CTRL_INFO_LEN   = 47;
+constexpr size_t CTRL_REVOKE_LEN = 7;
 struct MbxInfo { uint8_t sub; uint8_t version; uint8_t mbx_pub[32]; uint8_t token[8]; };
 size_t buildCtrlPlain(uint8_t* out, uint32_t ts, const MbxInfo& info);
 bool   parseCtrlPlain(const uint8_t* data, size_t len, uint32_t& ts, MbxInfo& out);
+// CTRL-plaintext rond een body vanaf sub, zoals de outbox hem bewaart (max MAX_TEXT bytes)
+size_t ctrlPlainFromBody(uint8_t* out, uint32_t ts, const uint8_t* body, size_t len);
 
 // Registratie (ANON_REQ-plaintext): ts(4) | 0xFF | 'M' | versie(1) | owner(4) | token(8)  -> 19 bytes
 size_t buildRegReq(uint8_t* out, uint32_t ts, const uint8_t owner[4], const uint8_t token[8]);
@@ -255,6 +271,8 @@ bool   parseQueryResp(const uint8_t* body, size_t len, QueryReply* r, uint8_t& n
 
 }}
 ```
+
+CTRL-plaintext wordt alleen in de codec opgebouwd: `Outbox` (ACK van een CTRL-entry) en `Node::sendDm` via `ctrlPlainFromBody`, `Node::onCtrlTxt` rekent het ACK over `buildCtrlPlain` van de geparste velden. Omdat `parseCtrlPlain` na `CTRL_INFO_LEN`/`CTRL_REVOKE_LEN` alleen nullen accepteert, zijn dat exact de ontvangen bytes zonder blokpadding.
 
 Wire-samenvatting (bytes, zonder de 4-byte timestamp of tag):
 
@@ -316,6 +334,9 @@ public:
 namespace rdm {
 class Clock {
 public:
+  static constexpr uint16_t    RECORD_SIZE = 12;
+  static constexpr const char* PATH = "/rdm/meta";
+
   explicit Clock(RecordFile& meta);
   bool     begin(uint32_t millis_now, bool storage_recreated, uint32_t random32);  // nieuwe store_id bij recreate
   uint32_t now(uint32_t millis_now, uint32_t rtc_now, bool rtc_trusted);          // G6, monotoon
@@ -345,6 +366,9 @@ enum : uint8_t { CR_CAP = 0x01, CR_HAS_MBX = 0x02, CR_MBX_INFO_SENT = 0x04 };
 
 class ContactTable {
 public:
+  static constexpr uint16_t    RECORD_SIZE = 52;           // ContactRdm, gepakt
+  static constexpr const char* PATH = "/rdm/contacts";
+
   explicit ContactTable(RecordFile& file);
   bool        begin();
   ContactRdm* find(const uint8_t pub_prefix[6]);
@@ -402,9 +426,14 @@ public:
 
 class Outbox {
 public:
+  static constexpr uint16_t    RECORD_SIZE = 201;          // OutEntry, gepakt
+  static constexpr const char* PATH = "/rdm/outbox";
+  static constexpr uint16_t    WATCH_RECORD_SIZE = 28;     // receipt-watch na SYNC_EXPIRED
+  static constexpr const char* WATCH_PATH = "/rdm/watch";
+
   enum class SendResult : uint8_t { NEW_ENTRY, EXISTING_ENTRY, NO_OUTBOX, TOO_LONG };
 
-  Outbox(RecordFile& file, RecordFile& watch, ContactTable& contacts, OutboxHost& host);   // watch: receipt-watch, payload 28
+  Outbox(RecordFile& file, RecordFile& watch, ContactTable& contacts, OutboxHost& host);
   bool       begin(uint32_t now);                          // laden, ACK's herberekenen, boot-kick plannen
   SendResult onAppSend(const uint8_t pub_prefix[6], uint32_t ts, uint8_t attempt, const char* text, size_t text_len,
                        uint32_t now, uint32_t& app_ack_out, bool& transmit_out);
@@ -430,7 +459,7 @@ public:
 
 Tags en time-outs (besluit WP3): `Node` kiest de REQ-timestamp zelf (`Clock::nextReqTimestamp`) en houdt tag-naar-soort bij (RAM, max 16 openstaand), zodat hij elk antwoord naar de juiste module en methode stuurt. De Outbox matcht antwoorden op inhoud (DEPOSIT op `pkt_hash`, STATUS op contact en `pkt_hash`, query op contact en `(ts, K)`, registratie op contact) en bewaakt time-outs met eigen timers (G3, G9). M vult `pkt_hash` in elk DEPOSIT-antwoord in, ook bij een foutcode.
 
-Receipt-watch (besluit WP3): tweede `RecordFile` `/rdm/watch`, payload 28 bytes: `ack_s`(6) | verloop(4) | pub_prefix(6) | ts(4) | K(4) | app_ack(4). Een late `ACK_S` na een reboot wordt zo nog herkend.
+Receipt-watch (besluit WP3): tweede `RecordFile` `Outbox::WATCH_PATH` (`/rdm/watch`), payload `WATCH_RECORD_SIZE` = 28 bytes: `ack_s`(6) | verloop(4) | pub_prefix(6) | ts(4) | K(4) | app_ack(4). Een late `ACK_S` na een reboot wordt zo nog herkend.
 
 ### 3.9 `RdmInbox.h`
 
@@ -486,6 +515,11 @@ public:
 
 class Inbox {
 public:
+  static constexpr uint16_t    RECORD_SIZE = 188;          // InRecord, gepakt
+  static constexpr const char* PATH = "/rdm/inbox";
+  static constexpr uint16_t    REG_RECORD_SIZE = 36;       // RegRecord, gepakt
+  static constexpr const char* REG_PATH = "/rdm/register";
+
   Inbox(RecordFile& inbox, RecordFile& reg, ContactTable& contacts, InboxHost& host);
   bool         begin(bool& recreated_out);
   RecvDecision onMessage(const RecvInput& in, uint32_t now);
@@ -517,6 +551,7 @@ public:
   virtual bool ownMailbox(uint8_t mbx_pub_out[32]) = 0;           // false: geen mailbox ingesteld
   virtual bool sendFetch(uint8_t flags, uint32_t store_id, const Report* r, uint8_t n, uint32_t& est_timeout_ms) = 0;
   virtual uint32_t random32() = 0;                                  // jitter (G17)
+  virtual bool canFetch() { return true; }                          // false: sendFetch zou nu weigeren
 };
 class Fetcher {
 public:
@@ -531,6 +566,8 @@ public:
 };
 }
 ```
+
+`canFetch()` laat de Fetcher een FETCH overslaan die de host toch zou weigeren, zonder eerst de openstaande rapporten uit het register te lezen; `Node` geeft `ownMailbox && reqAllowed` (REQ-gap per mailbox). `pendingReports` en `freeSlots` lezen alleen, dus het overslaan verandert niets aan het gedrag: de FETCH blijft due en gaat mee in de eerstvolgende `loop` waarin hij mag.
 
 Fetcher-regels uit WP4: minimaal `RDM_MBX_REQ_GAP_S` tussen twee FETCH's; één FETCH tegelijk, eigen time-out `max(2 × est_timeout, RDM_WAIT_ACK_MIN_S)` zonder directe herhaling; een laat antwoord bevestigt de rapporten alsnog; doorloop bij `resterend > 0` behalve bij volle inbox of openstaand INBOX_FULL; advert-trigger minimaal 10 min na de laatste FETCH van welke soort ook.
 
@@ -570,6 +607,9 @@ public:
 
 class Node : private OutboxHost, private InboxHost, private FetcherHost {
 public:
+  static constexpr uint16_t    MBX_RECORD_SIZE = 32 + 16;   // eigen mailbox: pubkey | K_owner
+  static constexpr const char* MBX_PATH = "/rdm/mbx";
+
   Node(FileIO& io, NodeHost& host);
   bool begin();                      // bestanden openen, aantallen uit io.freeBytes(); false = RDM uit
   bool enabled() const;
@@ -630,6 +670,7 @@ private:
   void onReportQueued() override;
   // FetcherHost
   bool ownMailbox(uint8_t mbx_pub_out[32]) override;
+  bool canFetch() override;
   bool sendFetch(uint8_t flags, uint32_t store_id, const Report* r, uint8_t n, uint32_t& est_timeout_ms) override;
 };
 
@@ -642,11 +683,11 @@ Slotaantallen per board (besluit WP6): T-Beam (ESP32, 4 MB) bouwt met `RDM_OUTBO
 
 De host-overrides staan in de header omdat `RdmChatMesh` een `rdm::Node` als member heeft; zonder deze declaraties is `Node` abstract. `test_rdm_headers` controleert dat met `std::is_abstract`.
 
-### 3.12 `RdmChatMesh.h` (integratielaag)
+### 3.12 `mesh/RdmChatMesh.h` (integratielaag)
 
 ```cpp
 #include <helpers/BaseChatMesh.h>
-#include "RdmNode.h"
+#include <helpers/rdm/RdmNode.h>
 
 class RdmChatMesh : public BaseChatMesh, protected rdm::NodeHost {
 public:
@@ -728,7 +769,7 @@ K3 (besluit K3): `RdmChatMesh::onAdvertRecv` geeft een advert van een verborgen 
 
 Antwoordcodes liggen onder 0x80 en pushcodes vanaf 0x80, zoals in het companion protocol; clients scheiden daarop antwoorden van pushes (besluit WP6: de eerdere `0xC0`-antwoordcode lag in de pushreeks). Met RDM uit geven de drie `CMD_RDM_*` `ERR_CODE_BAD_STATE`. Codering in `examples/companion_radio/RdmCompanionProto.h` (header-only: een losse `.cpp` zou een object toevoegen aan stock builds, die `examples/companion_radio/*.cpp` bouwen; pure functies, unit-getest). `MyMesh` streamt de lijst met `Node::listOutbox(&e, 1, i)`, zonder buffer voor de hele outbox.
 
-### 3.15 Mailbox: `MailboxCore.h` en backend
+### 3.15 Mailbox: `mailbox/MailboxCore.h` en backend
 
 ```cpp
 namespace rdm {
@@ -763,7 +804,7 @@ public:
   virtual ~MailboxCoreHost() {}
   virtual uint32_t millis() = 0;
   virtual bool txIdle() = 0;
-  virtual bool addPeer(const uint8_t pub[32]) = 0;            // peer-cache voor ontsleutelen, LRU 64
+  virtual bool addPeer(const uint8_t pub[32]) = 0;            // peer-cache voor ontsleutelen, LRU RDM_MBX_CLIENTS
   virtual bool sendResponse(const uint8_t client_pub[32], uint32_t tag, const uint8_t* body, size_t len, bool path_return) = 0;
 };
 
@@ -780,7 +821,7 @@ public:
 }
 ```
 
-Regels in `MailboxCore` (aangevuld na WP7): een REQ of registratie via flood krijgt een PATH-return, anders gaat het antwoord direct (`via_flood`); rate-limited FETCH/STATUS en ANON boven de globale limiet krijgen geen antwoord, DEPOSIT/REG wel (RATE_LIMITED); backend niet ready: DEPOSIT/REG direct NO_STORAGE, FETCH/STATUS niets; maximaal 4 antwoorden in de wachtrij, één per loop bij een lege zendwachtrij, 300 ms vertraging; peer-cache LRU 64 met onbevestigde ANON-afzenders eerst verdrongen. `MailboxMesh` forwardt niets, adverteert als `ADV_TYPE_ROOM` 30 s na boot en elke 12 u (flood) en decodeert base64 strikt. Een FETCH via flood gaat met `FETCH_FLAG_NO_PAYLOAD` naar de backend, zodat geen kopie op SENT komt die nooit verzonden wordt (WP8); `tijd_M` in het registratieantwoord is `backendTime()`; RATE_LIMITED komt alleen uit `MailboxCore`, nooit uit `mbxd`; replaycheck `ts < last_ts` per client (RAM); 1 REQ per 5 s en 60 per uur per client; ANON_REQ globaal 4 per minuut; FETCH via flood krijgt een PATH-return met `resterend` maar zonder kopie; DEPOSIT groter dan 164 bytes inner geeft TOO_BIG zonder backend-aanroep.
+Regels in `MailboxCore` (aangevuld na WP7): een REQ of registratie via flood krijgt een PATH-return, anders gaat het antwoord direct (`via_flood`); rate-limited FETCH/STATUS en ANON boven de globale limiet krijgen geen antwoord, DEPOSIT/REG wel (RATE_LIMITED); backend niet ready: DEPOSIT/REG direct NO_STORAGE, FETCH/STATUS niets; maximaal 4 antwoorden in de wachtrij, één per loop bij een lege zendwachtrij, 300 ms vertraging; peer-cache LRU met `RDM_MBX_CLIENTS` (64) plaatsen en onbevestigde ANON-afzenders eerst verdrongen; `MailboxCore` houdt rate-limits bij voor evenveel clients (`CLIENTS`) en `MailboxMesh.h` eist met een `static_assert` dat `MBX_PEER_CACHE_SIZE` gelijk is. `MailboxMesh` forwardt niets, adverteert als `ADV_TYPE_ROOM` 30 s na boot en elke 12 u (flood) en decodeert base64 strikt. Een FETCH via flood gaat met `FETCH_FLAG_NO_PAYLOAD` naar de backend, zodat geen kopie op SENT komt die nooit verzonden wordt (WP8); `tijd_M` in het registratieantwoord is `backendTime()`; RATE_LIMITED komt alleen uit `MailboxCore`, nooit uit `mbxd`; replaycheck `ts < last_ts` per client (RAM); 1 REQ per `RDM_MBX_SERVER_REQ_GAP_S` (5 s) en 60 per uur per client; ANON_REQ globaal 4 per minuut; FETCH via flood krijgt een PATH-return met `resterend` maar zonder kopie; DEPOSIT groter dan 164 bytes inner geeft TOO_BIG zonder backend-aanroep.
 
 ### 3.16 Regelprotocol radio <-> `mbxd`
 
@@ -812,13 +853,17 @@ Regels in `MailboxCore` (aangevuld na WP7): een REQ of registratie via flood kri
 ```
 src/Mesh.cpp                                   (WP5, flagged)
 src/helpers/BaseChatMesh.{h,cpp}               (WP5, flagged)
-src/helpers/rdm/RdmTypes.h RdmConfig.h         (WP0)
-src/helpers/rdm/Rdm{Crypto,Codec}.{h,cpp}      (h: WP0, cpp: WP1)
-src/helpers/rdm/Rdm{Storage,Clock,Contacts}.{h,cpp}, ArduinoFileIO.{h,cpp}  (h: WP0, rest: WP2)
-src/helpers/rdm/RdmOutbox.{h,cpp}              (h: WP0, cpp: WP3)
-src/helpers/rdm/Rdm{Inbox,Fetcher}.{h,cpp}     (h: WP0, cpp: WP4)
-src/helpers/rdm/Rdm{Node,ChatMesh}.{h,cpp}     (h: WP0, cpp: WP5)
-src/helpers/rdm/MailboxCore.{h,cpp}            (h: WP0, cpp: WP7)
+src/helpers/rdm/                               kern: platformvrij, geen MeshCore.h/Utils.h/Packet.h/Arduino.h/Stream.h
+  RdmTypes.h RdmConfig.h                       (WP0)
+  RdmBytes.h RdmPolicy.h                       (intern, refactorronde 2)
+  Rdm{Crypto,Codec}.{h,cpp}                    (h: WP0, cpp: WP1)
+  Rdm{Storage,Clock,Contacts}.{h,cpp}          (h: WP0, cpp: WP2)
+  RdmOutbox.{h,cpp}                            (h: WP0, cpp: WP3)
+  Rdm{Inbox,Fetcher}.{h,cpp}                   (h: WP0, cpp: WP4)
+  RdmNode.{h,cpp}                              (h: WP0, cpp: WP5)
+src/helpers/rdm/mesh/RdmChatMesh.{h,cpp}       integratielaag op BaseChatMesh (h: WP0, cpp: WP5)
+src/helpers/rdm/arduino/ArduinoFileIO.{h,cpp}  platformadapter FileIO (WP2)
+src/helpers/rdm/mailbox/MailboxCore.{h,cpp}    serverrol (h: WP0, cpp: WP7)
 examples/companion_radio/...                   (WP6)
 examples/mailbox_server/*.{h,cpp}              (WP7)
 examples/mailbox_server/mbxd/                  (WP8)
@@ -828,6 +873,18 @@ test/test_rdm_*/                               (per module, zie par. 5)
 test/sim/, test/test_sim_*/                    (dm-current, niet aanraken)
 tools/rdm/                                     (WP10; integrate.sh: tech lead)
 ```
+
+De map bepaalt welke build een bestand compileert; de envs noemen de mappen in `build_src_filter` (een `*.cpp`-patroon matcht niet recursief):
+
+| env | `build_src_filter` (RDM-deel) |
+|---|---|
+| `*_companion_radio_ble_rdm` (Heltec V3, RAK4631, T-Beam SX1262) | `+<helpers/rdm/*.cpp> +<helpers/rdm/mesh/*.cpp> +<helpers/rdm/arduino/*.cpp>` |
+| `Heltec_v3_mailbox_server` | `+<helpers/rdm/mailbox/*.cpp> +<helpers/rdm/RdmCodec.cpp> +<helpers/rdm/RdmCrypto.cpp>` (alleen wat `MailboxCore` gebruikt) |
+| `native_rdm` | de vier mappen, plus `-D RDM_SIM_FS` |
+
+Daardoor staan `RdmNode.cpp` en `RdmChatMesh.cpp` niet meer achter een bestandsbrede `#ifdef WITH_RELIABLE_DM`. `ArduinoFileIO` compileert met `ARDUINO` of `RDM_SIM_FS`; in `native_rdm` via het `RP2040_PLATFORM`-pad op de `fs::FS`-shim van de simulator (`test/sim/shim/FS.h`).
+
+Gedeelde testhelpers: `test/rdm_support/TestUtil.h` (patronen, sleutels, hex, LCG), `test/rdm_support/RdmTestStack.h` (inbox, register en contacten op de paden en recordgroottes van `Node`), `test/sim/CompanionFrames.h` (companion-codes en -frames; fork-codes uit `RdmCompanionProto.h`). Eigen suite: `test/test_rdm_internal/`.
 
 ## 5. Werkpakketten
 

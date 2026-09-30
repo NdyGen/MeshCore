@@ -1,6 +1,7 @@
 #pragma once
 
-#include "RdmTypes.h"
+#include <helpers/rdm/RdmConfig.h>
+#include <helpers/rdm/RdmTypes.h>
 
 namespace rdm {
 
@@ -53,7 +54,8 @@ private:
   MailboxBackend&  _be;
   MailboxCoreHost& _host;
 
-  static const uint8_t  CLIENTS = 64;           // same size as the host's peer cache
+  static const uint8_t  CLIENTS = RDM_MBX_CLIENTS;
+  static_assert(RDM_MBX_CLIENTS <= 255, "client count is 8 bit");
   static const uint8_t  PENDING = 8;            // backend requests in flight
   static const uint8_t  OUTQ = 4;               // responses waiting for an idle transmitter
   static const uint8_t  OWNER_TTLS = 8;

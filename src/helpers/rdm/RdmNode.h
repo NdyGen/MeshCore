@@ -43,6 +43,9 @@ public:
 
 class Node : private OutboxHost, private InboxHost, private FetcherHost {
 public:
+  static constexpr uint16_t    MBX_RECORD_SIZE = 32 + 16;   // own mailbox: pubkey | K_owner
+  static constexpr const char* MBX_PATH = "/rdm/mbx";
+
   Node(FileIO& io, NodeHost& host);
   bool begin();                      // open files, slot counts from io.freeBytes(); false = RDM off
   bool enabled() const;
@@ -162,6 +165,7 @@ private:
   void onReportQueued() override;
   // FetcherHost
   bool ownMailbox(uint8_t mbx_pub_out[32]) override;
+  bool canFetch() override;
   bool sendFetch(uint8_t flags, uint32_t store_id, const Report* r, uint8_t n, uint32_t& est_timeout_ms) override;
 };
 

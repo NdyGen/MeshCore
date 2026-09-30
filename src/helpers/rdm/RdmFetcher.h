@@ -10,6 +10,7 @@ public:
   virtual bool ownMailbox(uint8_t mbx_pub_out[32]) = 0;           // false: no mailbox configured
   virtual bool sendFetch(uint8_t flags, uint32_t store_id, const Report* r, uint8_t n, uint32_t& est_timeout_ms) = 0;
   virtual uint32_t random32() = 0;                                  // jitter (G17)
+  virtual bool canFetch() { return true; }                          // false: sendFetch would refuse right now
 };
 
 class Fetcher {

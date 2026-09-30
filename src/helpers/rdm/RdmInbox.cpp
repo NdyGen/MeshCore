@@ -8,8 +8,6 @@ namespace rdm {
 
 namespace {
 
-constexpr uint16_t IN_SIZE  = 188;
-constexpr uint16_t REG_SIZE = 36;
 constexpr uint16_t NO_SLOT  = 0xFFFF;
 constexpr uint8_t  REG_ON_RADIO = 0;
 constexpr uint8_t  REG_SYNCED   = 1;
@@ -95,15 +93,17 @@ Report reportOf(const RegRecord& r) {
   return rep;
 }
 
-bool sameReport(const Report& a, const Report& b) {
-  return a.result == b.result && memcmp(a.pkt_hash, b.pkt_hash, 8) == 0 && memcmp(a.ack, b.ack, 6) == 0;
-}
-
 uint8_t regIdxFlags(const RegRecord& r) {
   return IX_USED | (r.state == REG_SYNCED ? IX_SYNCED : 0) | ((r.flags & RF_REPORT_PENDING) ? IX_PENDING : 0);
 }
 
 }  // namespace
+
+// Out-of-class definitions for C++11 builds (nRF52): Node binds these members to references.
+constexpr uint16_t    Inbox::RECORD_SIZE;
+constexpr const char* Inbox::PATH;
+constexpr uint16_t    Inbox::REG_RECORD_SIZE;
+constexpr const char* Inbox::REG_PATH;
 
 Inbox::Inbox(RecordFile& inbox, RecordFile& reg, ContactTable& contacts, InboxHost& host)
     : _inbox(inbox), _reg(reg), _contacts(contacts), _host(host), _n_extra(0), _reg_slots(0), _in_slots(0),
@@ -119,7 +119,7 @@ bool Inbox::begin(bool& recreated_out) {
   _handed = NO_SLOT;
   memset(_reg_idx, 0, sizeof(_reg_idx));
   memset(_in_idx, 0, sizeof(_in_idx));
-  if (_inbox.payloadSize() != IN_SIZE || _reg.payloadSize() != REG_SIZE) return false;
+  if (_inbox.payloadSize() != RECORD_SIZE || _reg.payloadSize() != REG_RECORD_SIZE) return false;
 
   RecordFile::Open oi = _inbox.open();
   RecordFile::Open orr = _reg.open();
@@ -129,7 +129,7 @@ bool Inbox::begin(bool& recreated_out) {
   _in_slots = _inbox.slots() < RDM_INBOX_SLOTS_MAX ? _inbox.slots() : RDM_INBOX_SLOTS_MAX;
   _reg_slots = _reg.slots() < RDM_REGISTER_SLOTS_MAX ? _reg.slots() : RDM_REGISTER_SLOTS_MAX;
 
-  uint8_t buf[IN_SIZE];
+  uint8_t buf[RECORD_SIZE];
   for (uint16_t i = 0; i < _reg_slots; i++) {
     if (!_reg.read(i, buf)) continue;
     RegRecord r;
@@ -159,7 +159,7 @@ bool Inbox::begin(bool& recreated_out) {
 void Inbox::reconcile() {
   uint8_t linked[(RDM_INBOX_SLOTS_MAX + 7) / 8];
   memset(linked, 0, sizeof(linked));
-  uint8_t rbuf[REG_SIZE], ibuf[IN_SIZE];
+  uint8_t rbuf[REG_RECORD_SIZE], ibuf[RECORD_SIZE];
 
   for (uint16_t i = 0; i < _reg_slots; i++) {
     RegIdx& x = _reg_idx[i];
@@ -200,7 +200,7 @@ void Inbox::reconcile() {
 }
 
 int Inbox::findReg(const uint8_t prefix[6], uint32_t ts, const uint8_t key[4], RegRecord* out) {
-  uint8_t buf[REG_SIZE];
+  uint8_t buf[REG_RECORD_SIZE];
   for (uint16_t i = 0; i < _reg_slots; i++) {
     const RegIdx& x = _reg_idx[i];
     if (!(x.flags & IX_USED) || x.ts != ts || memcmp(x.key, key, 4) != 0) continue;
@@ -251,7 +251,7 @@ int Inbox::evictReg() {
   if (victim < 0) return -1;
   uint16_t slot = (uint16_t)victim;
 
-  uint8_t buf[REG_SIZE];
+  uint8_t buf[REG_RECORD_SIZE];
   if (_reg.read(slot, buf)) {
     RegRecord r;
     unpackReg(buf, r);
@@ -272,7 +272,7 @@ int Inbox::evictReg() {
 }
 
 bool Inbox::writeReg(uint16_t slot, const RegRecord& r) {
-  uint8_t buf[REG_SIZE];
+  uint8_t buf[REG_RECORD_SIZE];
   packReg(r, buf);
   if (!_reg.write(slot, buf)) return false;
   RegIdx& x = _reg_idx[slot];
@@ -348,7 +348,7 @@ RecvResult Inbox::store(const RecvInput& in, const uint8_t key[4], const RecvDec
   if (in.via_mailbox) memcpy(m.mbx_hash, in.mbx_hash, 8);
   m.text_len = in.text_len;
   if (in.text_len) memcpy(m.text, in.text, in.text_len);
-  uint8_t buf[IN_SIZE];
+  uint8_t buf[RECORD_SIZE];
   packIn(m, buf);
   if (!_inbox.write(is, buf)) {
     _inbox.erase(is);
@@ -428,7 +428,7 @@ bool Inbox::nextForApp(InRecord& out, uint16_t& slot_out) {
     }
     if (best < 0) return false;
     uint16_t slot = (uint16_t)best;
-    uint8_t buf[IN_SIZE];
+    uint8_t buf[RECORD_SIZE];
     if (_inbox.read(slot, buf)) {
       unpackIn(buf, out);
       slot_out = slot;
@@ -461,7 +461,7 @@ void Inbox::onNextSyncRequest(uint32_t now) {
   bool ack_s = false, report = false;
   RegRecord r;
   int ri = findRegForInbox(slot);
-  uint8_t buf[REG_SIZE];
+  uint8_t buf[REG_RECORD_SIZE];
   if (ri >= 0 && _reg.read((uint16_t)ri, buf)) {
     unpackReg(buf, r);
     r.state = REG_SYNCED;
@@ -509,7 +509,7 @@ QueryReply Inbox::query(const uint8_t sender_prefix[6], const QueryItem& q) {
 uint8_t Inbox::pendingReports(Report* out, uint8_t max) {
   uint8_t n = 0;
   for (uint8_t i = 0; i < _n_extra && n < max; i++) out[n++] = _extra[i];
-  uint8_t buf[REG_SIZE];
+  uint8_t buf[REG_RECORD_SIZE];
   for (uint16_t i = 0; i < _reg_slots && n < max; i++) {
     if ((_reg_idx[i].flags & (IX_USED | IX_PENDING)) != (IX_USED | IX_PENDING) || !_reg.read(i, buf)) continue;
     RegRecord r;
@@ -522,7 +522,7 @@ uint8_t Inbox::pendingReports(Report* out, uint8_t max) {
 // A confirmation clears a row only if its current report is the one confirmed: a SYNCED report that replaced
 // an in-flight ON_RADIO report stays pending.
 void Inbox::onReportsConfirmed(const Report* sent, uint8_t n_ok) {
-  uint8_t buf[REG_SIZE];
+  uint8_t buf[REG_RECORD_SIZE];
   for (uint8_t k = 0; k < n_ok; k++) {
     bool done = false;
     for (uint8_t e = 0; e < _n_extra && !done; e++) {

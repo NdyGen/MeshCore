@@ -1,9 +1,6 @@
-// Only in builds with reliable DM; the mailbox build (WITH_DM_MAILBOX alone) compiles helpers/rdm/*.cpp too.
-#ifdef WITH_RELIABLE_DM
-
 #include "RdmChatMesh.h"
 
-#include "RdmCodec.h"
+#include <helpers/rdm/RdmCodec.h>
 
 #include <string.h>
 
@@ -340,5 +337,3 @@ bool RdmChatMesh::decryptTxtPayload(const uint8_t* payload, size_t len, uint8_t 
   }
   return false;
 }
-
-#endif

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <helpers/BaseChatMesh.h>
-#include "RdmNode.h"
+#include <helpers/rdm/RdmNode.h>
 
 // Integration layer between packets and rdm::Node, shared by the companion (MyMesh) and the simulator.
 // NodeHost mesh side (sending, lookupContact via ContactInfo::isFav, millis, random32, txIdle, selfPub) is implemented here;

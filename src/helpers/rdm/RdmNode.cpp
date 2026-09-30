@@ -1,6 +1,3 @@
-// Only in builds with reliable DM; the mailbox build (WITH_DM_MAILBOX alone) compiles helpers/rdm/*.cpp too.
-#ifdef WITH_RELIABLE_DM
-
 #include "RdmNode.h"
 
 #include "RdmCodec.h"
@@ -12,17 +9,7 @@ namespace rdm {
 
 namespace {
 
-const char* const P_META     = "/rdm/meta";
-const char* const P_CONTACTS = "/rdm/contacts";
-const char* const P_OUTBOX   = "/rdm/outbox";
-const char* const P_WATCH    = "/rdm/watch";
-const char* const P_INBOX    = "/rdm/inbox";
-const char* const P_REGISTER = "/rdm/register";
-const char* const P_MBX      = "/rdm/mbx";
-
-const uint16_t SZ_META = 12, SZ_CONTACT = 52, SZ_OUTBOX = 201, SZ_WATCH = 28, SZ_INBOX = 188, SZ_REG = 36;
-const uint16_t SZ_MBX = 32 + 16;   // own mailbox: pubkey | K_owner
-const uint8_t  FORMAT_VER = 1;
+const uint8_t FORMAT_VER = 1;
 
 struct Plan { uint16_t outbox, watch, contacts, inbox, reg; };
 const Plan PLAN_MAX = { RDM_OUTBOX_SLOTS_MAX, RDM_WATCH_SLOTS_MAX, RDM_CONTACT_SLOTS_MAX, RDM_INBOX_SLOTS_MAX,
@@ -30,10 +17,12 @@ const Plan PLAN_MAX = { RDM_OUTBOX_SLOTS_MAX, RDM_WATCH_SLOTS_MAX, RDM_CONTACT_S
 const Plan PLAN_MIN = { 4, 8, 8, 8, 32 };
 
 uint32_t planBytes(const Plan& p) {
-  return RecordFile::fileSize(SZ_OUTBOX, p.outbox, true) + RecordFile::fileSize(SZ_WATCH, p.watch, false) +
-         RecordFile::fileSize(SZ_CONTACT, p.contacts, true) + RecordFile::fileSize(SZ_INBOX, p.inbox, false) +
-         RecordFile::fileSize(SZ_REG, p.reg, true) + RecordFile::fileSize(SZ_META, 1, true) +
-         RecordFile::fileSize(SZ_MBX, 1, true);
+  return RecordFile::fileSize(Outbox::RECORD_SIZE, p.outbox, true) +
+         RecordFile::fileSize(Outbox::WATCH_RECORD_SIZE, p.watch, false) +
+         RecordFile::fileSize(ContactTable::RECORD_SIZE, p.contacts, true) +
+         RecordFile::fileSize(Inbox::RECORD_SIZE, p.inbox, false) +
+         RecordFile::fileSize(Inbox::REG_RECORD_SIZE, p.reg, true) + RecordFile::fileSize(Clock::RECORD_SIZE, 1, true) +
+         RecordFile::fileSize(Node::MBX_RECORD_SIZE, 1, true);
 }
 
 uint16_t scaled(uint16_t max, uint16_t min, uint64_t num, uint64_t den) {
@@ -53,7 +42,8 @@ uint16_t existingSlots(FileIO& io, const char* path, uint16_t payload, uint16_t 
 }
 
 uint32_t existingBytes(FileIO& io) {
-  const char* const paths[] = { P_META, P_CONTACTS, P_OUTBOX, P_WATCH, P_INBOX, P_REGISTER, P_MBX };
+  const char* const paths[] = { Clock::PATH, ContactTable::PATH, Outbox::PATH, Outbox::WATCH_PATH, Inbox::PATH,
+                                Inbox::REG_PATH, Node::MBX_PATH };
   uint32_t n = 0;
   for (const char* p : paths) {
     int32_t s = io.size(p);
@@ -73,6 +63,10 @@ uint32_t get32(const uint8_t* p) {
 }
 
 }  // namespace
+
+// Out-of-class definitions for C++11 builds (nRF52): Node binds these members to references.
+constexpr uint16_t    Node::MBX_RECORD_SIZE;
+constexpr const char* Node::MBX_PATH;
 
 Node::Node(FileIO& io, NodeHost& host) : _io(io), _host(host) {
   memset(_own_mbx, 0, sizeof(_own_mbx));
@@ -117,19 +111,19 @@ bool Node::begin() {
   p.contacts = scaled(PLAN_MAX.contacts, PLAN_MIN.contacts, num, full);
   p.inbox    = scaled(PLAN_MAX.inbox, PLAN_MIN.inbox, num, full);
   p.reg      = scaled(PLAN_MAX.reg, PLAN_MIN.reg, num, full);
-  if (uint16_t s = existingSlots(_io, P_OUTBOX, SZ_OUTBOX, PLAN_MAX.outbox)) p.outbox = s;
-  if (uint16_t s = existingSlots(_io, P_WATCH, SZ_WATCH, PLAN_MAX.watch)) p.watch = s;
-  if (uint16_t s = existingSlots(_io, P_CONTACTS, SZ_CONTACT, PLAN_MAX.contacts)) p.contacts = s;
-  if (uint16_t s = existingSlots(_io, P_INBOX, SZ_INBOX, PLAN_MAX.inbox)) p.inbox = s;
-  if (uint16_t s = existingSlots(_io, P_REGISTER, SZ_REG, PLAN_MAX.reg)) p.reg = s;
+  if (uint16_t s = existingSlots(_io, Outbox::PATH, Outbox::RECORD_SIZE, PLAN_MAX.outbox)) p.outbox = s;
+  if (uint16_t s = existingSlots(_io, Outbox::WATCH_PATH, Outbox::WATCH_RECORD_SIZE, PLAN_MAX.watch)) p.watch = s;
+  if (uint16_t s = existingSlots(_io, ContactTable::PATH, ContactTable::RECORD_SIZE, PLAN_MAX.contacts)) p.contacts = s;
+  if (uint16_t s = existingSlots(_io, Inbox::PATH, Inbox::RECORD_SIZE, PLAN_MAX.inbox)) p.inbox = s;
+  if (uint16_t s = existingSlots(_io, Inbox::REG_PATH, Inbox::REG_RECORD_SIZE, PLAN_MAX.reg)) p.reg = s;
 
-  RecordFile& meta = _f_meta.make(_io, P_META, FORMAT_VER, SZ_META, (uint16_t)1, true);
-  RecordFile& cf   = _f_contacts.make(_io, P_CONTACTS, FORMAT_VER, SZ_CONTACT, p.contacts, true);
-  RecordFile& of   = _f_outbox.make(_io, P_OUTBOX, FORMAT_VER, SZ_OUTBOX, p.outbox, true);
-  RecordFile& wf   = _f_watch.make(_io, P_WATCH, FORMAT_VER, SZ_WATCH, p.watch, false);
-  RecordFile& inf  = _f_inbox.make(_io, P_INBOX, FORMAT_VER, SZ_INBOX, p.inbox, false);
-  RecordFile& rf   = _f_reg.make(_io, P_REGISTER, FORMAT_VER, SZ_REG, p.reg, true);
-  _f_mbx.make(_io, P_MBX, FORMAT_VER, SZ_MBX, (uint16_t)1, true);
+  RecordFile& meta = _f_meta.make(_io, Clock::PATH, FORMAT_VER, Clock::RECORD_SIZE, (uint16_t)1, true);
+  RecordFile& cf   = _f_contacts.make(_io, ContactTable::PATH, FORMAT_VER, ContactTable::RECORD_SIZE, p.contacts, true);
+  RecordFile& of   = _f_outbox.make(_io, Outbox::PATH, FORMAT_VER, Outbox::RECORD_SIZE, p.outbox, true);
+  RecordFile& wf   = _f_watch.make(_io, Outbox::WATCH_PATH, FORMAT_VER, Outbox::WATCH_RECORD_SIZE, p.watch, false);
+  RecordFile& inf  = _f_inbox.make(_io, Inbox::PATH, FORMAT_VER, Inbox::RECORD_SIZE, p.inbox, false);
+  RecordFile& rf   = _f_reg.make(_io, Inbox::REG_PATH, FORMAT_VER, Inbox::REG_RECORD_SIZE, p.reg, true);
+  _f_mbx.make(_io, MBX_PATH, FORMAT_VER, MBX_RECORD_SIZE, (uint16_t)1, true);
 
   ContactTable& contacts = _contacts.make(cf);
   Clock& clock = _clock.make(meta);
@@ -252,9 +246,11 @@ void Node::onCtrlTxt(const uint8_t sender_pub[32], const uint8_t* data, size_t l
   codec::MbxInfo info;
   if (!enabled() || !codec::parseCtrlPlain(data, len, ts, info)) return;
 
-  size_t plain_len = info.sub == CTRL_MBX_INFO ? 47 : 7;   // the ACK covers the plaintext without block padding
-  uint8_t ack[4];
-  crypto::ctrlAck(ack, data, plain_len, sender_pub);
+  // The ACK covers the plaintext without block padding; parse accepted only zeros after it, so rebuilding
+  // from the parsed fields gives exactly the sender's bytes.
+  uint8_t plain[codec::CTRL_INFO_LEN], ack[4];
+  size_t plain_len = codec::buildCtrlPlain(plain, ts, info);
+  crypto::ctrlAck(ack, plain, plain_len, sender_pub);
   _host.sendAck(sender_pub, ack, 4);
 
   uint32_t t = now();
@@ -412,7 +408,7 @@ void Node::onClientDisconnected() {
 bool Node::loadOwnMailbox() {
   RecordFile& f = _f_mbx.get();
   if (f.open() == RecordFile::Open::FAILED) return false;
-  uint8_t rec[SZ_MBX];
+  uint8_t rec[MBX_RECORD_SIZE];
   _has_own_mbx = f.read(0, rec) && !isZero(rec, 32);
   if (_has_own_mbx) {
     memcpy(_own_mbx, rec, 32);
@@ -431,7 +427,7 @@ bool Node::setOwnMailbox(const uint8_t* mbx_pub, const uint8_t* k_owner) {
 
   RecordFile& f = _f_mbx.get();
   if (set) {
-    uint8_t rec[SZ_MBX];
+    uint8_t rec[MBX_RECORD_SIZE];
     memcpy(rec, mbx_pub, 32);
     memcpy(rec + 32, k_owner, 16);
     if (!f.write(0, rec)) return false;
@@ -468,7 +464,7 @@ bool Node::setOwnMailbox(const uint8_t* mbx_pub, const uint8_t* k_owner) {
     uint8_t pub[32];
     bool fav = false, path = false;
     if (!_host.lookupContact(targets[k], pub, fav, path) || !fav) continue;
-    uint8_t plain[47];
+    uint8_t plain[codec::CTRL_INFO_LEN];
     size_t n = buildMbxCtrl(plain, pub);
     if (n) ob.addCtrl(targets[k], plain, n, t);
   }
@@ -512,7 +508,7 @@ void Node::maybeSendMbxInfo(const uint8_t sender_pub[32]) {
   if (!_host.lookupContact(sender_pub, pub, fav, path) || !fav) return;
   const ContactRdm* c = _contacts.get().find(sender_pub);
   if (c && (c->flags & CR_MBX_INFO_SENT)) return;
-  uint8_t plain[47];
+  uint8_t plain[codec::CTRL_INFO_LEN];
   size_t n = buildMbxCtrl(plain, pub);
   if (n) _outbox.get().addCtrl(sender_pub, plain, n, _now);   // Outbox ignores a repeat of an unacknowledged one
 }
@@ -609,15 +605,8 @@ bool Node::txIdle() { return _host.txIdle(); }
 
 bool Node::sendDm(const OutEntry& e, uint8_t attempt, bool flood, uint32_t& est_timeout_ms) {
   uint8_t plain[5 + MAX_TEXT + 3];
-  size_t n;
-  if (e.flags & OF_CTRL) {
-    memcpy(plain, &e.ts, 4);
-    plain[4] = TXT_TYPE_RDM_CTRL << 2;
-    memcpy(plain + 5, e.text, e.text_len);
-    n = 5 + e.text_len;
-  } else {
-    n = codec::buildTxtPlain(plain, e.ts, 0, attempt, e.text, e.text_len, true);
-  }
+  size_t n = (e.flags & OF_CTRL) ? codec::ctrlPlainFromBody(plain, e.ts, (const uint8_t*)e.text, e.text_len)
+                                 : codec::buildTxtPlain(plain, e.ts, 0, attempt, e.text, e.text_len, true);
   return n && _host.sendTxtPlain(e.pub_prefix, plain, n, flood, est_timeout_ms);
 }
 
@@ -699,6 +688,8 @@ bool Node::ownMailbox(uint8_t mbx_pub_out[32]) {
   return true;
 }
 
+bool Node::canFetch() { return _has_own_mbx && reqAllowed(_own_mbx); }
+
 bool Node::sendFetch(uint8_t flags, uint32_t store_id, const Report* r, uint8_t n, uint32_t& est_timeout_ms) {
   if (!_has_own_mbx) return false;
   uint8_t body[1 + 1 + 4 + 1 + MAX_BATCH * 15];
@@ -707,5 +698,3 @@ bool Node::sendFetch(uint8_t flags, uint32_t store_id, const Report* r, uint8_t 
 }
 
 }
-
-#endif

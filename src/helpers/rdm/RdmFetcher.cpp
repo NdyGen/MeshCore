@@ -10,10 +10,6 @@ namespace {
 
 constexpr uint32_t NONE = UINT32_MAX;
 
-bool sameReport(const Report& a, const Report& b) {
-  return a.result == b.result && memcmp(a.pkt_hash, b.pkt_hash, 8) == 0 && memcmp(a.ack, b.ack, 6) == 0;
-}
-
 }  // namespace
 
 Fetcher::Fetcher(Inbox& inbox, FetcherHost& host)
@@ -44,6 +40,7 @@ void Fetcher::trigger(uint32_t now) {
 }
 
 bool Fetcher::send(uint32_t now, bool is_retry) {
+  if (!_host.canFetch()) return false;   // saves reading the register for a FETCH that cannot go out
   Report r[MAX_BATCH];
   uint8_t n = _inbox.pendingReports(r, MAX_BATCH);
   uint8_t flags = _inbox.freeSlots() == 0 ? FETCH_FLAG_NO_PAYLOAD : 0;

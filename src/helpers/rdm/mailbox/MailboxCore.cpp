@@ -1,8 +1,8 @@
 #include "MailboxCore.h"
 
-#include "RdmCodec.h"
-#include "RdmConfig.h"
-#include "RdmCrypto.h"
+#include <helpers/rdm/RdmCodec.h>
+#include <helpers/rdm/RdmConfig.h>
+#include <helpers/rdm/RdmCrypto.h>
 
 #include <string.h>
 
@@ -11,7 +11,7 @@ namespace rdm {
 namespace {
 
 const uint32_t BACKEND_TIMEOUT_MS = 3000;
-const uint32_t REQ_GAP_MS = 5000;             // 1 REQ per 5 s per client (03 par. 5)
+const uint32_t REQ_GAP_MS = RDM_MBX_SERVER_REQ_GAP_S * 1000UL;
 const uint32_t HOUR_MS = 3600UL * 1000;
 const uint8_t  REQ_PER_HOUR = 60;
 const uint32_t ANON_WINDOW_MS = 60000;
