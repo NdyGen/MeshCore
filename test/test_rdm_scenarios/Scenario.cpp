@@ -4,21 +4,10 @@
 
 namespace sim {
 
-namespace {
-
-std::unique_ptr<CompanionCtl> addCompanion(Simulator& s, CompanionModel model, const char* name) {
-  if (model == CompanionModel::FIRMWARE) return std::unique_ptr<CompanionCtl>(new FirmwareCompanionCtl(s.add<CompanionNode>(name)));
-  return std::unique_ptr<CompanionCtl>(new SimCompanionCtl(s.add<RdmSimCompanion>(name)));
-}
-
-}
-
 World::World(const WorldOptions& o) : s(o.seed), opt(o) {
-  bob_ctl = addCompanion(s, o.model, "bob");
-  bob = &bob_ctl->node();
+  bob = &s.add<CompanionNode>("bob");
   if (o.layout == Layout::VIA_REPEATER) rep = &s.add<RepeaterNode>("rep");
-  alice_ctl = addCompanion(s, o.model, "alice");
-  alice = &alice_ctl->node();
+  alice = &s.add<CompanionNode>("alice");
   if (o.alice_rdm_flash) {
     SimFS& fs = alice->fs();
     for (auto it = fs.files.begin(); it != fs.files.end();) it = it->first.compare(0, 5, "/rdm/") == 0 ? fs.files.erase(it) : std::next(it);
@@ -35,14 +24,15 @@ World::World(const WorldOptions& o) : s(o.seed), opt(o) {
       std::vector<char> buf(tmpl.begin(), tmpl.end());
       buf.push_back(0);
       if (mkdtemp(buf.data())) mbxd_dir = buf.data();
-      mbxd.reset(new SubprocessBackend(SubprocessBackend::locateMbxd(), mbxd_dir + "/mbxd.db",
-                                       [this] { return s.wall_epoch(); }));
+      std::string daemon = SubprocessBackend::locateMbxd();
+      EXPECT_FALSE(daemon.empty()) << SubprocessBackend::missingDaemon();
+      mbxd.reset(new SubprocessBackend(daemon, mbxd_dir + "/mbxd.db", [this] { return s.wall_epoch(); }));
       SubprocessBackend::Owner ow;
       memcpy(ow.pub, alice->identity().pub_key, 32);
       memcpy(ow.k_owner, k_owner[i], 16);
       EXPECT_TRUE(mbxd->ownerAdd(ow)) << mbxd->lastError();
       EXPECT_TRUE(mbxd->start()) << mbxd->lastError();
-      // the radio says HELLO to mbxd at every boot; replies still queued keep fast-forward from jumping
+      // the radio says HELLO to the daemon at every boot; replies still queued keep fast-forward from jumping
       mbx.push_back(&s.add<RdmSimMailbox>(name, *mbxd, [this] { if (mbxd->running()) mbxd->hello(); },
                                           [this] { return mbxd->pendingReplies() > 0; }));
     } else {
@@ -67,11 +57,9 @@ World::World(const WorldOptions& o) : s(o.seed), opt(o) {
   if (rep) wires.addNode(*rep);
   for (SimNode* m : mbx) wires.addNode(*m);
 
-  bob_app.reset(new RdmSimApp(s, bob_ctl->port()));
+  bob_app.reset(new RdmSimApp(s, *bob));
   bob_app->rdm_client = o.bob_rdm_client;
-  alice_app.reset(new RdmSimApp(s, alice_ctl->port()));
-  bob_ctl->attach(*bob_app);
-  alice_ctl->attach(*alice_app);
+  alice_app.reset(new RdmSimApp(s, *alice));
   bob_app->connect();
   alice_app->connect();
 
@@ -110,12 +98,12 @@ World::~World() {
 }
 
 void World::introduce() {
-  bob_ctl->advert();
+  bob->app().advert(true);
   runFor(5000);
-  alice_ctl->advert();
+  alice->app().advert(true);
   runFor(5000);
-  bob_ctl->addContact(*alice, true);
-  alice_ctl->addContact(*bob, true);
+  addContact(*bob, *alice, true);
+  addContact(*alice, *bob, true);
   runFor(1000);
 }
 
@@ -164,17 +152,6 @@ bool World::bobKnowsAliceMailbox(int i) {
   ContactRdmView v;
   if (!readContactRdm(bob->fs(), alice->identity().pub_key, v)) return false;
   return (v.flags & rdm::CR_HAS_MBX) && memcmp(v.mbx_pub, mbxPub(i), 32) == 0;
-}
-
-int World::outState(CompanionCtl& c, const SimNode& to, uint32_t ts) {
-  if (!c.node().powered()) return -1;
-  Simulator::OnNode ctx(s, c.node());
-  rdm::OutEntry e[RDM_OUTBOX_SLOTS_MAX];
-  uint8_t n = c.rdm().listOutbox(e, RDM_OUTBOX_SLOTS_MAX);
-  for (uint8_t i = 0; i < n; i++) {
-    if (e[i].ts == ts && memcmp(e[i].pub_prefix, to.identity().pub_key, 6) == 0) return (int)e[i].state;
-  }
-  return -1;
 }
 
 void World::wipeAliceInbox() {
