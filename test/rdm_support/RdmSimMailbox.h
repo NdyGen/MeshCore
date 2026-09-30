@@ -28,7 +28,7 @@ public:
   void advert(bool flood = true);
 
 protected:
-  mesh::Mesh* createMesh() override;
+  MeshPtr createMesh() override;
   void beginMesh() override;
   void loopMesh() override;
   void onBoot() override;

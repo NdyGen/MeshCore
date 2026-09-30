@@ -245,7 +245,7 @@ CompanionNode::CompanionNode(Simulator& sim, std::string name, int index)
 
 CompanionNode::~CompanionNode() = default;
 
-mesh::Mesh* CompanionNode::createMesh() {
+MeshPtr CompanionNode::createMesh() {
   _store.reset(new DataStore(_flash, rtc()));
 #ifdef WITH_RELIABLE_DM
   _rdm_io.reset(new rdm::ArduinoFileIO(_flash));
@@ -253,7 +253,7 @@ mesh::Mesh* CompanionNode::createMesh() {
 #else
   _firmware = new DeterministicPeerData<MyMesh>(radio(), rng(), rtc(), tables(), *_store);
 #endif
-  return _firmware;
+  return ownMesh(_firmware);
 }
 
 // Same order as examples/companion_radio/main.cpp setup(): store.begin(), the_mesh.begin(), startInterface().

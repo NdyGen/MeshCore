@@ -62,9 +62,9 @@ ChatNode::ChatNode(Simulator& sim, std::string name, int index) : SimNode(sim, s
 
 ChatNode::~ChatNode() = default;
 
-mesh::Mesh* ChatNode::createMesh() {
+MeshPtr ChatNode::createMesh() {
   _impl = new Impl(*this, radio(), millisClock(), rng(), rtc(), packetManager(), tables());
-  return _impl;
+  return ownMesh(_impl);
 }
 
 void ChatNode::onBoot() { SimContacts::load(chat(), fs()); }
@@ -199,8 +199,8 @@ protected:
 };
 }
 
-mesh::Mesh* RepeaterNode::createMesh() {
-  return new RepeaterMesh(radio(), millisClock(), rng(), rtc(), packetManager(), tables());
+MeshPtr RepeaterNode::createMesh() {
+  return ownMesh(new RepeaterMesh(radio(), millisClock(), rng(), rtc(), packetManager(), tables()));
 }
 
 void RepeaterNode::advert() {

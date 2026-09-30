@@ -140,7 +140,7 @@ void SimNode::boot() {
 
   SimNode* prev = _sim._current;
   _sim._current = this;
-  _mesh.reset(createMesh());
+  _mesh = createMesh();
   if (_sim_identity) _mesh->self_id = _identity;
   beginMesh();
   _identity = _mesh->self_id;

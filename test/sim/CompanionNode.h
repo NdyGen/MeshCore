@@ -141,7 +141,7 @@ public:
   bool rtcTrusted();
 
 protected:
-  mesh::Mesh* createMesh() override;
+  MeshPtr createMesh() override;
   void beginMesh() override;
   void loopMesh() override;
   void onLoop() override;

@@ -65,6 +65,13 @@ using TxHook = std::function<void(const TxRecord& tx)>;
 class Simulator;
 class SimNode;
 
+// mesh::Mesh (and Dispatcher) have no virtual destructor, so a node deletes its mesh as the type createMesh() made.
+using MeshPtr = std::unique_ptr<mesh::Mesh, void (*)(mesh::Mesh*)>;
+template <class T>
+MeshPtr ownMesh(T* m) {
+  return MeshPtr(m, [](mesh::Mesh* p) { delete static_cast<T*>(p); });
+}
+
 class SimRNG : public mesh::RNG {
   uint64_t _state = 0;
 public:
@@ -151,7 +158,7 @@ class SimNode {
   std::unique_ptr<SimRadio> _radio;
   std::unique_ptr<StaticPoolPacketManager> _mgr;
   std::unique_ptr<SimpleMeshTables> _tables;
-  std::unique_ptr<mesh::Mesh> _mesh;
+  MeshPtr _mesh{nullptr, [](mesh::Mesh*) {}};
   mesh::LocalIdentity _identity;
 
   void boot();
@@ -166,7 +173,7 @@ protected:
   SimNode(Simulator& sim, std::string name, int index);
 
   // Construct the node's mesh on top of radio()/millis()/rng()/rtc()/packetManager()/tables(). Called on every boot.
-  virtual mesh::Mesh* createMesh() = 0;
+  virtual MeshPtr createMesh() = 0;
   // Mesh::begin() is not virtual; firmwares with their own begin() (companion MyMesh) override this.
   virtual void beginMesh() { _mesh->begin(); }
   virtual void onBoot() {}

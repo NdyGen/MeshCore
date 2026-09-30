@@ -141,7 +141,7 @@ public:
   BaseChatMesh& chat();
 
 protected:
-  mesh::Mesh* createMesh() override;
+  MeshPtr createMesh() override;
   void onBoot() override;
   void loopMesh() override;
   void onLoop() override;
@@ -168,7 +168,7 @@ public:
   void advert();
 
 protected:
-  mesh::Mesh* createMesh() override;
+  MeshPtr createMesh() override;
 };
 
 }

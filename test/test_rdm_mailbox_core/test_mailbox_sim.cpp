@@ -71,9 +71,9 @@ public:
   bool got(uint32_t tag) const { return responses.count(tag) > 0; }
 
 protected:
-  mesh::Mesh* createMesh() override {
+  MeshPtr createMesh() override {
     _impl = new Impl(*this, radio(), millisClock(), rng(), rtc(), packetManager(), tables());
-    return _impl;
+    return ownMesh(_impl);
   }
   void loopMesh() override { _impl->loop(); }
 };
