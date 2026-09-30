@@ -1191,9 +1191,6 @@ void MyMesh::handleCmdFrame(size_t len) {
         memcpy(&out_frame[2], &expected_ack, 4);
         memcpy(&out_frame[6], &est_timeout, 4);
         _serial->writeFrame(out_frame, 10);
-#ifdef WITH_RELIABLE_DM
-        _rdm_frames.fillAppAck(pub_key_prefix, msg_timestamp, expected_ack);   // TOO_BIG / NO_OUTBOX status
-#endif
       }
     } else {
       writeErrFrame(recipient == NULL

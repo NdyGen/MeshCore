@@ -307,17 +307,6 @@ public:
     _head = (uint8_t)((_head + 1) % N);
     _count--;
   }
-
-  // Status frames of this message that went out without an app_ack get the one RESP_CODE_SENT carried.
-  void fillAppAck(const uint8_t pub_prefix[6], uint32_t ts, uint32_t app_ack) {
-    for (uint8_t k = 0; k < _count; k++) {
-      uint8_t* f = _buf[(_head + k) % N];
-      if (_len[(_head + k) % N] == STATUS_FRAME_LEN && f[0] == PUSH_CODE_RDM_STATUS && get32(&f[1]) == 0 &&
-          get32(&f[10]) == ts && memcmp(&f[14], pub_prefix, 6) == 0) {
-        put32(&f[1], app_ack);
-      }
-    }
-  }
 };
 
 }}

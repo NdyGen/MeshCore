@@ -334,6 +334,100 @@ TEST(RdmCompanion, TooLongTextIsSentUpstreamWithTooBigStatus) {
   EXPECT_EQ(p.alice.app().inbox_count(text), 1u);
 }
 
+// ---- D57: the app_ack in a TOO_BIG / NO_OUTBOX status is the ack RESP_CODE_SENT carries ----
+
+namespace {
+
+constexpr uint8_t MAX_TEXT_LEN_UPSTREAM = 160;   // MAX_TEXT_LEN (BaseChatMesh.h)
+
+struct RawSend {
+  Frame reply;
+  std::vector<StatusPush> pushes;   // 0x91 frames for this message, in order
+};
+
+// Sends CMD_SEND_TXT_MSG on the link and collects the reply plus the status pushes for that timestamp.
+RawSend rawSend(Simulator& s, RawCompanion& n, const SimNode& to, uint32_t ts, uint8_t attempt, const std::string& text) {
+  RawSend out;
+  bool got = false;
+  size_t from = n.app().push_log().size();
+  n.app().send_command(buildSendTxt(to.identity().pub_key, ts, attempt, text), [&](const Frame& r) {
+    out.reply = r;
+    got = true;
+  });
+  EXPECT_TRUE(s.run_until([&] { return got; }, 5000));
+  s.run_for(1000);
+  for (size_t i = from; i < n.app().push_log().size(); i++) {
+    const Frame& f = n.app().push_log()[i];
+    StatusPush sp;
+    if (decodeStatus(f.data(), f.size(), sp) && sp.ts == ts && memcmp(sp.pub_prefix, to.identity().pub_key, 6) == 0)
+      out.pushes.push_back(sp);
+  }
+  return out;
+}
+
+}
+
+// Text lengths around the fork limit (MAX_TEXT = 157) up to what the frame allows (163): the outbox keeps 156 and 157
+// (QUEUED), 158-160 go out the upstream way with TOO_BIG, above 160 upstream refuses the message. Whatever the
+// status, its app_ack is the expected_ack of RESP_CODE_SENT: both are SHA256(ts | attempt & 3 | text | self_pub).
+TEST(RdmCompanion, TooBigStatusCarriesTheAckOfRespCodeSent) {
+  Pair p(613);
+  enable(p.s, p.bob);
+  p.s.unlink(p.bob, p.alice);
+  uint32_t ts = p.s.wall_epoch();
+  for (size_t len = rdm::MAX_TEXT - 1; len <= MAX_FRAME_SIZE - 13; len++) {
+    SCOPED_TRACE("text length " + std::to_string(len));
+    ts++;
+    RawSend r = rawSend(p.s, p.bob, p.alice, ts, 0, std::string(len, 'a' + (char)(len % 26)));
+    ASSERT_EQ(r.pushes.size(), 1u);
+    if (len <= rdm::MAX_TEXT) {
+      EXPECT_EQ(r.pushes[0].status, rdm::UserStatus::QUEUED);
+    } else {
+      EXPECT_EQ(r.pushes[0].status, rdm::UserStatus::TOO_BIG);
+    }
+    if (len <= MAX_TEXT_LEN_UPSTREAM) {
+      SentReply sent;
+      ASSERT_TRUE(decodeSent(r.reply, sent)) << "reply code " << (int)r.reply[0];
+      EXPECT_EQ(r.pushes[0].app_ack, sent.expected_ack);
+    } else {
+      EXPECT_EQ(r.reply[0], RESP_CODE_ERR) << "upstream refuses a text above MAX_TEXT_LEN";
+      EXPECT_NE(r.pushes[0].app_ack, 0u);
+    }
+  }
+  // attempt above 3: upstream keeps only the low two bits for the ack, and refuses a text above MAX_TEXT_LEN - 2
+  ts++;
+  RawSend r = rawSend(p.s, p.bob, p.alice, ts, 5, std::string(MAX_TEXT_LEN_UPSTREAM - 2, 'q'));
+  ASSERT_EQ(r.pushes.size(), 1u);
+  EXPECT_EQ(r.pushes[0].status, rdm::UserStatus::TOO_BIG);
+  SentReply sent;
+  ASSERT_TRUE(decodeSent(r.reply, sent));
+  EXPECT_EQ(r.pushes[0].app_ack, sent.expected_ack);
+  ts++;
+  r = rawSend(p.s, p.bob, p.alice, ts, 5, std::string(MAX_TEXT_LEN_UPSTREAM - 1, 'q'));
+  ASSERT_EQ(r.pushes.size(), 1u);
+  EXPECT_EQ(r.pushes[0].status, rdm::UserStatus::TOO_BIG);
+  EXPECT_EQ(r.reply[0], RESP_CODE_ERR);
+}
+
+TEST(RdmCompanion, NoOutboxStatusCarriesTheAckOfRespCodeSent) {
+  Pair p(614);
+  enable(p.s, p.bob);
+  p.s.unlink(p.bob, p.alice);
+  std::vector<int> ids;
+  for (int i = 0; i < RDM_OUTBOX_SLOTS_MAX; i++) ids.push_back(p.bob.app().send_text(p.alice, "fill #" + std::to_string(i)));
+  ASSERT_TRUE(p.s.run_until([&] { return p.bob.app().idle(); }, 60000));
+  p.s.run_for(2000);   // the QUEUED pushes leave the frame queue from the main loop
+  for (int id : ids) ASSERT_EQ(statusesFor(p.bob.app(), p.bob.app().sent(id).expected_ack), std::vector<rdm::UserStatus>{rdm::UserStatus::QUEUED});
+
+  uint32_t ts = p.s.wall_epoch() + 100;
+  RawSend r = rawSend(p.s, p.bob, p.alice, ts, 0, "one too many");
+  ASSERT_EQ(r.pushes.size(), 1u);
+  EXPECT_EQ(r.pushes[0].status, rdm::UserStatus::NO_OUTBOX);
+  SentReply sent;
+  ASSERT_TRUE(decodeSent(r.reply, sent));
+  EXPECT_EQ(r.pushes[0].app_ack, sent.expected_ack);
+}
+
 #ifdef RDM_STATUS_CHANNEL
 // ---- local status channel "rdm-status" for the standard app (env native_rdm_status) ----
 

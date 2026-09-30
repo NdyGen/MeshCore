@@ -320,36 +320,6 @@ TEST(FrameQueue, RejectsOversizedFramesAndClears) {
   EXPECT_TRUE(q.empty());
 }
 
-// TOO_BIG and NO_OUTBOX are reported before the DM goes out the upstream way; the app_ack is only known after.
-TEST(FrameQueue, FillsInTheAppAckOfMatchingStatusFrames) {
-  FrameQueue<4, 24> q;
-  uint8_t f[STATUS_FRAME_LEN];
-  StatusPush mine = samplePush(UserStatus::TOO_BIG);
-  mine.app_ack = 0;
-  encodeStatus(f, mine);
-  q.push(f, sizeof(f));
-  StatusPush other = mine;
-  other.ts += 1;
-  encodeStatus(f, other);
-  q.push(f, sizeof(f));
-  StatusPush acked = samplePush(UserStatus::QUEUED);
-  acked.app_ack = 0x55;
-  encodeStatus(f, acked);
-  q.push(f, sizeof(f));
-
-  q.fillAppAck(PREFIX, mine.ts, 0xABCD1234);
-  size_t len;
-  StatusPush back;
-  ASSERT_TRUE(decodeStatus(q.front(len), len, back));
-  EXPECT_EQ(back.app_ack, 0xABCD1234u);
-  q.pop();
-  ASSERT_TRUE(decodeStatus(q.front(len), len, back));
-  EXPECT_EQ(back.app_ack, 0u);
-  q.pop();
-  ASSERT_TRUE(decodeStatus(q.front(len), len, back));
-  EXPECT_EQ(back.app_ack, 0x55u);
-}
-
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
