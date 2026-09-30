@@ -433,10 +433,6 @@ TEST(RdmCompanion, NoOutboxStatusCarriesTheAckOfRespCodeSent) {
 
 namespace {
 
-// not in CompanionFrames.h (frozen this round): channel commands the simulated app never uses
-constexpr uint8_t CMD_GET_CHANNEL = 31;
-constexpr uint8_t RESP_CODE_CHANNEL_INFO = 18;
-
 bool hasReply(const std::vector<Frame>& g) {
   for (const Frame& f : g)
     if (f[0] < 0x80) return true;
@@ -519,11 +515,6 @@ TEST(RdmStatusChannel, OnRadioAndDeliveredOnceNoQueuedNoReplayDuplicate) {
 // ---- K3: a mailbox that became a contact through auto-add leaves the contact list once it is a hidden peer ----
 
 namespace {
-
-// not in CompanionFrames.h (frozen this round)
-constexpr uint8_t CMD_ADD_UPDATE_CONTACT = 9;
-constexpr uint8_t PUSH_CODE_NEW_ADVERT = 0x8A;
-constexpr uint8_t PUSH_CODE_CONTACT_DELETED = 0x8F;
 
 // CMD_ADD_UPDATE_CONTACT as the app sends it when the user marks a favourite (MBX_INFO only goes to favourites).
 void markFavourite(Simulator& s, CompanionNode& n, const SimNode& other) {
