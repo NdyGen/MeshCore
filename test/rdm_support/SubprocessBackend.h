@@ -26,11 +26,11 @@ public:
     uint8_t ttl_days = 7, sync_days = 30, quota = 20;
   };
 
-  // mbxd_path: mbxd.py; db_path: its SQLite file (created by owner-add or on start). clock: Pi unix time now.
+  // mbxd_path: mbxd.py (run with python3) or a mbxd binary; db_path: its SQLite file (created by owner-add or on start). clock: Pi unix time now.
   SubprocessBackend(std::string mbxd_path, std::string db_path, ClockFn clock);
   ~SubprocessBackend() override;
 
-  // mbxd.py from $RDM_MBXD, else examples/mailbox_server/mbxd/mbxd.py below the working directory; "" if missing.
+  // mbxd.py or a mbxd binary from $RDM_MBXD, else examples/mailbox_server/mbxd/mbxd.py below the working directory; "" if missing.
   static std::string locateMbxd();
 
   // `mbxd --db <db> owner-add ...` as the Pi admin would; before start(), or restart() afterwards (06 par. 3.16).

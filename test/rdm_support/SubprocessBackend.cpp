@@ -109,6 +109,15 @@ pid_t spawn(const std::vector<std::string>& argv, int* to_child, int* from_child
   return pid;
 }
 
+// mbxd.py runs under python3; any other path (the Rust mbxd) is executed directly.
+std::vector<std::string> daemonArgv(const std::string& mbxd, std::vector<std::string> args) {
+  std::vector<std::string> argv;
+  if (mbxd.size() > 3 && mbxd.compare(mbxd.size() - 3, 3, ".py") == 0) argv.push_back("python3");
+  argv.push_back(mbxd);
+  argv.insert(argv.end(), args.begin(), args.end());
+  return argv;
+}
+
 }  // namespace
 
 SubprocessBackend::SubprocessBackend(std::string mbxd_path, std::string db_path, ClockFn clock)
@@ -124,9 +133,9 @@ std::string SubprocessBackend::locateMbxd() {
 }
 
 bool SubprocessBackend::ownerAdd(const Owner& o) {
-  std::vector<std::string> argv = { "python3", _mbxd, "--db", _db, "owner-add", hex(o.pub, 32),
-                                    "--k-owner", hex(o.k_owner, 16), "--ttl-days", std::to_string(o.ttl_days),
-                                    "--sync-days", std::to_string(o.sync_days), "--quota", std::to_string(o.quota) };
+  std::vector<std::string> argv = daemonArgv(_mbxd, { "--db", _db, "owner-add", hex(o.pub, 32),
+                                                      "--k-owner", hex(o.k_owner, 16), "--ttl-days", std::to_string(o.ttl_days),
+                                                      "--sync-days", std::to_string(o.sync_days), "--quota", std::to_string(o.quota) });
   pid_t pid = spawn(argv, nullptr, nullptr);
   if (pid < 0) return fail("owner-add: spawn failed");
   int status = 0;
@@ -139,7 +148,7 @@ bool SubprocessBackend::ownerAdd(const Owner& o) {
 bool SubprocessBackend::start() {
   if (_pid > 0) return true;
   signal(SIGPIPE, SIG_IGN);   // a dead child must show up as a failed write, not kill the test
-  _pid = spawn({ "python3", _mbxd, "--db", _db, "serve", "--stdio", "--fake-clock" }, &_to_child, &_from_child);
+  _pid = spawn(daemonArgv(_mbxd, { "--db", _db, "serve", "--stdio", "--fake-clock" }), &_to_child, &_from_child);
   if (_pid < 0) return fail("serve: spawn failed");
   _rx.clear();
   _ready = false;
