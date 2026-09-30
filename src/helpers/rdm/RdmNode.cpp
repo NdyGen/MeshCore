@@ -18,6 +18,20 @@ uint16_t scaled(uint16_t max, uint16_t min, uint64_t num, uint64_t den) {
   return (uint16_t)(v > max ? max : v);
 }
 
+// A parsed DM as the inbox takes it. Only a plain text (txt_type 0) that fits an inbox record is accepted.
+bool toRecvInput(const codec::TxtParsed& p, const uint8_t* sender, RecvInput& out) {
+  if (p.txt_type != 0 || p.text_len > INBOX_TEXT_MAX) return false;
+  memset(&out, 0, sizeof(out));
+  out.sender_pub = sender;
+  out.ts = p.ts;
+  out.flags = p.flags;
+  out.txt_type = p.txt_type;
+  out.text = p.text;
+  out.text_len = (uint8_t)p.text_len;
+  out.sender_cap = p.cap;
+  return true;
+}
+
 }  // namespace
 
 // Out-of-class definitions for C++11 builds (nRF52): Node binds these members to references.
@@ -196,17 +210,8 @@ RecvDecision Node::onPlainTxt(const uint8_t sender_pub[32], const uint8_t* data,
   memset(&d, 0, sizeof(d));
   d.result = RecvResult::STORE_ERROR;
   codec::TxtParsed p;
-  if (!enabled() || !codec::parseTxtPlain(data, len, p) || p.txt_type != 0 || p.text_len > INBOX_TEXT_MAX) return d;
-
   RecvInput in;
-  memset(&in, 0, sizeof(in));
-  in.sender_pub = sender_pub;
-  in.ts = p.ts;
-  in.flags = p.flags;
-  in.txt_type = p.txt_type;
-  in.text = p.text;
-  in.text_len = (uint8_t)p.text_len;
-  in.sender_cap = p.cap;
+  if (!enabled() || !codec::parseTxtPlain(data, len, p) || !toRecvInput(p, sender_pub, in)) return d;
   in.path_len = path_len;
   in.snr_x4 = snr_x4;
   uint32_t t = now();
@@ -323,19 +328,11 @@ void Node::onFetchResponse(const uint8_t* body, size_t len) {
     uint8_t sender[32], plain[MAX_INNER_PAYLOAD];
     size_t plain_len = sizeof(plain);
     codec::TxtParsed p;
+    RecvInput in;
     if (!_mesh.decryptTxtPayload(inner, inner_len, sender, plain, plain_len) || !codec::parseTxtPlain(plain, plain_len, p) ||
-        p.txt_type != 0 || p.text_len > INBOX_TEXT_MAX) {
+        !toRecvInput(p, sender, in)) {
       ib.onUndecryptable(hash);
     } else {
-      RecvInput in;
-      memset(&in, 0, sizeof(in));
-      in.sender_pub = sender;
-      in.ts = p.ts;
-      in.flags = p.flags;
-      in.txt_type = p.txt_type;
-      in.text = p.text;
-      in.text_len = (uint8_t)p.text_len;
-      in.sender_cap = p.cap;
       in.via_mailbox = true;
       in.mbx_hash = hash;
       in.path_len = 0xFF;
@@ -450,12 +447,9 @@ bool Node::setOwnMailbox(const uint8_t* mbx_pub, const uint8_t* k_owner) {
 uint8_t Node::listOutbox(OutEntry* out, uint8_t max, uint8_t offset) {
   if (!enabled()) return 0;
   Outbox& ob = _outbox.get();
-  uint8_t n = 0, seen = 0;
-  for (uint8_t i = 0; i < ob.count() && n < max; i++) {
-    if (!ob.get(i, out[n])) continue;
-    if (seen++ < offset) continue;
-    n++;
-  }
+  uint8_t n = 0;
+  // get() succeeds for every index below count(); that guard also keeps offset + n from wrapping
+  for (; n < max && offset + n < ob.count() && ob.get((uint8_t)(offset + n), out[n]); n++) {}
   return n;
 }
 
@@ -534,9 +528,15 @@ void Node::noteReq(const uint8_t mbx_pub[32]) {
   slot->used = true;
 }
 
+uint32_t Node::reqTag() {
+  bool trusted = false;
+  return _clock.get().nextReqTimestamp(_app.rtcNow(trusted));
+}
+
 // Replies are matched on tag and peer; an old entry is overwritten after PENDING_MAX newer REQs, which is
 // harmless: Outbox and Fetcher run their own time-outs and treat a missing reply like a lost one.
-Node::Pending* Node::addPending(uint8_t kind, uint32_t tag, const uint8_t peer_pub[32]) {
+Node::Pending* Node::track(uint8_t kind, uint32_t tag, const uint8_t peer_pub[32], bool to_mailbox) {
+  if (to_mailbox) noteReq(peer_pub);
   Pending* p = &_pending[_next_pending];
   _next_pending = (uint8_t)((_next_pending + 1) % PENDING_MAX);
   memset(p, 0, sizeof(*p));
@@ -550,11 +550,9 @@ bool Node::sendTracked(uint8_t kind, const uint8_t peer_pub[32], const uint8_t* 
                        uint32_t& est_timeout_ms, Pending** out) {
   bool to_mailbox = kind != REQ_QUERY;
   if (to_mailbox && !reqAllowed(peer_pub)) return false;
-  bool trusted = false;
-  uint32_t tag = _clock.get().nextReqTimestamp(_app.rtcNow(trusted));
+  uint32_t tag = reqTag();
   if (!_mesh.sendReq(peer_pub, tag, body, len, flood, est_timeout_ms)) return false;
-  if (to_mailbox) noteReq(peer_pub);
-  Pending* p = addPending(kind, tag, peer_pub);
+  Pending* p = track(kind, tag, peer_pub, to_mailbox);
   if (out) *out = p;
   return true;
 }
@@ -628,14 +626,11 @@ bool Node::sendStatus(const uint8_t pub_prefix[6], const uint8_t (*hashes)[8], u
 bool Node::sendRegister(const uint8_t pub_prefix[6], uint32_t& est_timeout_ms) {
   uint8_t mbx[32], token[8];
   if (!contactMailbox(pub_prefix, mbx, token) || !reqAllowed(mbx)) return false;
-  bool trusted = false;
-  uint32_t tag = _clock.get().nextReqTimestamp(_app.rtcNow(trusted));
+  uint32_t tag = reqTag();
   uint8_t plain[32];
   size_t len = codec::buildRegReq(plain, tag, pub_prefix, token);
   if (!len || !_mesh.sendAnonReq(mbx, plain, len, est_timeout_ms)) return false;
-  noteReq(mbx);
-  Pending* p = addPending(REQ_REGISTER, tag, mbx);
-  memcpy(p->contact, pub_prefix, 6);
+  memcpy(track(REQ_REGISTER, tag, mbx, true)->contact, pub_prefix, 6);
   return true;
 }
 

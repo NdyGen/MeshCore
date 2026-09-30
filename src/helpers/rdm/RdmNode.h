@@ -148,7 +148,8 @@ private:
   bool     contactMailbox(const uint8_t contact_prefix[6], uint8_t mbx_pub[32], uint8_t token[8]);
   bool     reqAllowed(const uint8_t mbx_pub[32]);
   void     noteReq(const uint8_t mbx_pub[32]);
-  Pending* addPending(uint8_t kind, uint32_t tag, const uint8_t peer_pub[32]);
+  uint32_t reqTag();                          // next REQ timestamp (K2), also the tag of its RESPONSE
+  Pending* track(uint8_t kind, uint32_t tag, const uint8_t peer_pub[32], bool to_mailbox);
   bool     sendTracked(uint8_t kind, const uint8_t peer_pub[32], const uint8_t* body, size_t len, bool flood,
                        uint32_t& est_timeout_ms, Pending** out);
   void     onFetchResponse(const uint8_t* body, size_t len);
