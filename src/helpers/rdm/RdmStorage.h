@@ -60,4 +60,11 @@ private:
   bool     finishMigration(const char* tmp);
 };
 
+// Internal to the core, not part of the contract: what Node's slot planning needs of a file it has not opened yet.
+namespace detail {
+// Record size and slot count from the header of a RecordFile; false without a readable "RDMF" header. Lax on purpose:
+// no A/B byte or file size check, RecordFile::open sorts that out.
+bool peekLayout(FileIO& io, const char* path, uint16_t& payload_size, uint16_t& slots);
+}
+
 }

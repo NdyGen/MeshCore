@@ -178,15 +178,34 @@ bool RecordFile::writeHeader(const char* path) const {
   return _io.write(path, 0, h, sizeof(h));
 }
 
-bool RecordFile::readHeader(const char* path, Header& out) const {
-  int32_t size = _io.size(path);
+struct RawHeader { uint8_t ver; uint8_t ab; uint16_t payload_size; uint16_t slots; };
+
+static bool readRawHeader(FileIO& io, const char* path, RawHeader& out) {
   uint8_t h[HEADER_SIZE];
-  if (size < (int32_t)HEADER_SIZE || !_io.read(path, 0, h, sizeof(h))) return false;
-  if (memcmp(h, MAGIC, 4) != 0 || h[5] > 1) return false;
+  if (!io.read(path, 0, h, sizeof(h)) || memcmp(h, MAGIC, 4) != 0) return false;
   out.ver = h[4];
-  out.ab = h[5] != 0;
+  out.ab = h[5];
   out.payload_size = get16(&h[6]);
   out.slots = get16(&h[8]);
+  return true;
+}
+
+bool detail::peekLayout(FileIO& io, const char* path, uint16_t& payload_size, uint16_t& slots) {
+  RawHeader h;
+  if (!readRawHeader(io, path, h)) return false;
+  payload_size = h.payload_size;
+  slots = h.slots;
+  return true;
+}
+
+bool RecordFile::readHeader(const char* path, Header& out) const {
+  int32_t size = _io.size(path);
+  RawHeader h;
+  if (size < (int32_t)HEADER_SIZE || !readRawHeader(_io, path, h) || h.ab > 1) return false;
+  out.ver = h.ver;
+  out.ab = h.ab != 0;
+  out.payload_size = h.payload_size;
+  out.slots = h.slots;
   return (uint32_t)size == fileSize(out.payload_size, out.slots, out.ab);
 }
 
