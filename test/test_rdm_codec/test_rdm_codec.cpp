@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <helpers/rdm/RdmBytes.h>
 #include <helpers/rdm/RdmCodec.h>
 
 #include <MeshCore.h>
+#include <TestUtil.h>
 #include <Utils.h>
 
 #include <functional>
@@ -34,11 +36,9 @@ void expectPaddingRules(const Bytes& full, const Parser& parse) {
 
 Bytes fill(size_t n, uint8_t seed) {
   Bytes b(n);
-  for (size_t i = 0; i < n; i++) b[i] = (uint8_t)(seed + i * 7);
+  fillPattern(b.data(), n, seed);
   return b;
 }
-
-uint32_t rd32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
 
 }
 
@@ -199,7 +199,7 @@ TEST(RdmCodecCtrl, MbxInfoRoundTrip) {
   uint8_t out[64];
   size_t n = buildCtrlPlain(out, 0xA0B0C0D0, in);
   ASSERT_EQ(n, 47u);
-  EXPECT_EQ(rd32(out), 0xA0B0C0D0u);
+  EXPECT_EQ(get32(out), 0xA0B0C0D0u);
   EXPECT_EQ(out[4], 0x20);
   EXPECT_EQ(out[5], CTRL_MBX_INFO);
   EXPECT_EQ(out[6], CTRL_VERSION);

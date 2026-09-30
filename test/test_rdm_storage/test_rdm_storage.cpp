@@ -1,8 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <helpers/rdm/RdmBytes.h>
 #include <helpers/rdm/RdmStorage.h>
 
 #include <MemFileIO.h>
+#include <TestUtil.h>
 
 #include <string.h>
 
@@ -18,11 +20,9 @@ const uint16_t PS = 20;
 
 std::vector<uint8_t> val(uint8_t seed, uint16_t size = PS) {
   std::vector<uint8_t> v(size);
-  for (uint16_t i = 0; i < size; i++) v[i] = (uint8_t)(seed * 31 + i);
+  fillPattern(v.data(), size, seed * 31u, 1);
   return v;
 }
-
-uint32_t rd32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
 
 bool readEq(const RecordFile& f, uint16_t slot, const std::vector<uint8_t>& expect) {
   std::vector<uint8_t> buf(f.payloadSize());
@@ -468,7 +468,7 @@ Outcome writeAndInspect(MemFileIO& io, bool ab, bool erase) {
     uint32_t off = FILE_HDR + c * (COPY_HDR + PS);
     if (memcmp(&before[off], &after[off], COPY_HDR + PS) == 0) continue;
     o.target = o.target < 0 ? c : 2;
-    o.seq = rd32(&after[off]);
+    o.seq = get32(&after[off]);
     o.used = after[off + 6] != 0;
   }
   return o;

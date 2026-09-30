@@ -8,6 +8,8 @@
 
 #include "ChatNode.h"
 
+#include <TestUtil.h>
+
 #include <string>
 #include <vector>
 
@@ -17,12 +19,6 @@ namespace {
 
 const uint8_t PUB[32] = {0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15,
                          16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
-
-std::vector<uint8_t> hex(const char* s) {
-  std::vector<uint8_t> out;
-  for (size_t i = 0; s[i] && s[i + 1]; i += 2) out.push_back((uint8_t)std::stoi(std::string(s + i, 2), nullptr, 16));
-  return out;
-}
 
 std::string randomText(sim::SimRNG& rng, size_t len) {
   std::string t;
@@ -37,13 +33,13 @@ TEST(RdmCrypto, KnownVectors) {
   uint8_t out[8];
   // sha256(pack('<I', 0x66AABBCC) + b'\x01' + b'hello' + pub)[:4]
   crypto::ackR(out, 0x66AABBCC, 1, "hello", 5, PUB);
-  EXPECT_EQ(std::vector<uint8_t>(out, out + 4), hex("7bd7391e"));
+  EXPECT_EQ(toHexLower(out, 4), "7bd7391e");
   // sha256(b'RDMS' + pack('<I', ts) + b'\x00' + b'hello' + pub)[:6]
   crypto::ackS(out, 0x66AABBCC, 0, "hello", 5, PUB);
-  EXPECT_EQ(std::vector<uint8_t>(out, out + 6), hex("58b2221c48f1"));
+  EXPECT_EQ(toHexLower(out, 6), "58b2221c48f1");
   // sha256(pack('<I', ts) + b'hello' + pub)[:4]
   crypto::key(out, 0x66AABBCC, "hello", 5, PUB);
-  EXPECT_EQ(std::vector<uint8_t>(out, out + 4), hex("97608c93"));
+  EXPECT_EQ(toHexLower(out, 4), "97608c93");
 }
 
 TEST(RdmCrypto, TokenBMatchesPythonHmac) {
@@ -52,12 +48,12 @@ TEST(RdmCrypto, TokenBMatchesPythonHmac) {
   for (int i = 0; i < 32; i++) pub[i] = (uint8_t)(0x20 + i);
   // hmac.new(bytes(range(16)), bytes(range(0x20, 0x40)), sha256).hexdigest()[:16]
   crypto::tokenB(out, k_owner, pub);
-  EXPECT_EQ(std::vector<uint8_t>(out, out + 8), hex("21b8e892bb84c076"));
+  EXPECT_EQ(toHexLower(out, 8), "21b8e892bb84c076");
 
   memset(k_owner, 0xA5, sizeof(k_owner));
   memset(pub, 0x5A, sizeof(pub));
   crypto::tokenB(out, k_owner, pub);
-  EXPECT_EQ(std::vector<uint8_t>(out, out + 8), hex("7baff5da3d30a8d3"));
+  EXPECT_EQ(toHexLower(out, 8), "7baff5da3d30a8d3");
 }
 
 TEST(RdmCrypto, TokenBDependsOnSenderPub) {

@@ -3,24 +3,17 @@
 #include <helpers/rdm/RdmInbox.h>
 
 #include <MemFileIO.h>
+#include <RdmTestStack.h>
 #include <SHA256.h>
+#include <TestUtil.h>
 #include <Utils.h>
 
-#include <memory>
 #include <string>
 #include <vector>
-
 
 using namespace rdm;
 
 namespace {
-
-const char* const INBOX_PATH = "/rdm/inbox";
-const char* const REG_PATH = "/rdm/register";
-const char* const CONTACTS_PATH = "/rdm/contacts";
-constexpr uint16_t IN_PAYLOAD = 188;
-constexpr uint16_t REG_PAYLOAD = 36;
-constexpr uint16_t CONTACT_PAYLOAD = 52;
 
 // MemFileIO plus one path whose writes fail, to break exactly one of the two files.
 class PathFaultIO : public MemFileIO {
@@ -50,11 +43,8 @@ public:
   void onReportQueued() override { reports_queued++; }
 };
 
-struct Sender {
-  uint8_t pub[32];
-  explicit Sender(uint8_t seed) {
-    for (int i = 0; i < 32; i++) pub[i] = (uint8_t)(seed * 31 + i * 7 + 1);
-  }
+struct Sender : TestKey {
+  explicit Sender(uint8_t seed) : TestKey(seed * 31u, 7, 1) {}
 };
 
 // Reference formulas from 03 par. 1a, computed here independently of the code under test.
@@ -88,54 +78,30 @@ void refKey(uint8_t out[4], uint32_t ts, const std::string& text, const uint8_t 
   refHash(out, 4, le32(ts), text, pub);
 }
 
-class InboxTest : public ::testing::Test {
-protected:
+// The flash lives in a base of its own so it exists before the stack that opens it.
+struct Flash {
   PathFaultIO io;
+};
+
+class InboxTest : public ::testing::Test, protected Flash, protected RdmTestStack {
+protected:
+  using Flash::io;   // the fault-injecting one, not the FileIO& the stack keeps
   Host host;
-  uint16_t in_slots = 8;
-  uint16_t reg_slots = 16;
-  std::unique_ptr<RecordFile> inbox_file, reg_file, contacts_file;
-  std::unique_ptr<ContactTable> contacts;
-  std::unique_ptr<Inbox> inbox;
-  bool recreated = false;
-  std::vector<std::string> texts;   // keeps RecvInput::text alive
 
   Sender alice{1}, bob{2}, carol{3}, dave{4}, erin{5};
   uint8_t hash1[8] = {1, 1, 1, 1, 1, 1, 1, 1};
   uint8_t hash2[8] = {2, 2, 2, 2, 2, 2, 2, 2};
 
+  InboxTest() : RdmTestStack(io) {}
+
   void SetUp() override { boot(); }
 
   // A reboot: new objects on the same flash.
-  void boot() {
-    inbox.reset();
-    contacts.reset();
-    inbox_file.reset(new RecordFile(io, INBOX_PATH, 1, IN_PAYLOAD, in_slots, false));
-    reg_file.reset(new RecordFile(io, REG_PATH, 1, REG_PAYLOAD, reg_slots, true));
-    contacts_file.reset(new RecordFile(io, CONTACTS_PATH, 1, CONTACT_PAYLOAD, 16, true));
-    contacts.reset(new ContactTable(*contacts_file));
-    ASSERT_TRUE(contacts->begin());
-    inbox.reset(new Inbox(*inbox_file, *reg_file, *contacts, host));
-    ASSERT_TRUE(inbox->begin(recreated));
-  }
+  void boot() { RdmTestStack::boot(host); }
 
   RecvInput msg(const Sender& s, uint32_t ts, const std::string& text, uint8_t attempt = 0, bool cap = true,
                 const uint8_t* mbx_hash = nullptr) {
-    texts.push_back(text);
-    RecvInput in;
-    memset(&in, 0, sizeof(in));
-    in.sender_pub = s.pub;
-    in.ts = ts;
-    in.flags = attempt & 3;
-    in.txt_type = 0;
-    in.text = texts.back().c_str();
-    in.text_len = (uint8_t)text.size();
-    in.sender_cap = cap;
-    in.via_mailbox = mbx_hash != nullptr;
-    in.mbx_hash = mbx_hash;
-    in.path_len = 2;
-    in.snr_x4 = -12;
-    return in;
+    return makeRecv(s.pub, ts, text, cap, mbx_hash, attempt, 2, -12);
   }
 
   RecvDecision recv(const Sender& s, uint32_t ts, const std::string& text, uint32_t now = 1000, uint8_t attempt = 0,
@@ -302,7 +268,7 @@ TEST_F(InboxTest, TornInboxWriteGivesNoAck) {
 
 // Only the inbox write fails, the register write would succeed: still no ACK_R for a message that is not stored (#3518).
 TEST_F(InboxTest, InboxWriteFailureAloneGivesNoAck) {
-  io.fail_path = INBOX_PATH;
+  io.fail_path = Inbox::PATH;
   RecvDecision d = recv(alice, 100, "not stored");
   EXPECT_EQ(d.result, RecvResult::STORE_ERROR);
   EXPECT_FALSE(d.send_ack_r);
@@ -314,7 +280,7 @@ TEST_F(InboxTest, InboxWriteFailureAloneGivesNoAck) {
 }
 
 TEST_F(InboxTest, RegisterWriteFailureRollsBackTheInboxRecord) {
-  io.fail_path = REG_PATH;
+  io.fail_path = Inbox::REG_PATH;
   RecvDecision d = recv(alice, 100, "half");
   EXPECT_EQ(d.result, RecvResult::STORE_ERROR);
   EXPECT_FALSE(d.send_ack_r);
@@ -653,7 +619,7 @@ TEST_F(InboxTest, LostInboxDropsUnsyncedRegisterRowsSoTheSenderResends) {
   ASSERT_EQ(recv(alice, 1, "synced").result, RecvResult::NEW);
   ASSERT_TRUE(syncOne());
   ASSERT_EQ(recv(alice, 2, "pending").result, RecvResult::NEW);
-  io.remove(INBOX_PATH);
+  io.remove(Inbox::PATH);
   boot();
   EXPECT_TRUE(recreated) << "new store_id: the mailbox re-delivers (G12)";
   EXPECT_EQ(query(alice, 2, "pending").state, QueryState::UNKNOWN) << "D2: resend over loss";
@@ -663,7 +629,7 @@ TEST_F(InboxTest, LostInboxDropsUnsyncedRegisterRowsSoTheSenderResends) {
 
 TEST_F(InboxTest, LostRegisterKeepsUnsyncedMessagesForTheApp) {
   ASSERT_EQ(recv(alice, 1, "keep me").result, RecvResult::NEW);
-  io.remove(REG_PATH);
+  io.remove(Inbox::REG_PATH);
   boot();
   EXPECT_TRUE(recreated);
   InRecord rec;
@@ -685,7 +651,7 @@ TEST_F(InboxTest, NewRegisterClearsWatermarks) {
   ASSERT_EQ(recv(carol, 30, "c30").result, RecvResult::NEW);   // evicts a10
   ASSERT_EQ(query(alice, 5, "old").state, QueryState::EVICTED);
 
-  io.remove(REG_PATH);
+  io.remove(Inbox::REG_PATH);
   boot();
   EXPECT_TRUE(recreated);
   ContactRdm* c = contacts->find(alice.pub);
@@ -714,7 +680,7 @@ TEST_F(InboxTest, InterruptedSyncIsCompletedAtBoot) {
   uint16_t slot;
   ASSERT_TRUE(inbox->nextForApp(rec, slot));
   inbox->onHandedToApp(slot);
-  io.fail_path = INBOX_PATH;   // register says SYNCED, freeing the inbox record fails
+  io.fail_path = Inbox::PATH;   // register says SYNCED, freeing the inbox record fails
   inbox->onNextSyncRequest(2000);
   io.fail_path.clear();
   boot();
@@ -729,7 +695,7 @@ TEST_F(InboxTest, FailedSyncWriteKeepsTheMessageUnsynced) {
   uint16_t slot;
   ASSERT_TRUE(inbox->nextForApp(rec, slot));
   inbox->onHandedToApp(slot);
-  io.fail_path = REG_PATH;
+  io.fail_path = Inbox::REG_PATH;
   inbox->onNextSyncRequest(2000);
   io.fail_path.clear();
   EXPECT_TRUE(host.ack_s.empty()) << "no ACK_S without a persisted SYNCED";
