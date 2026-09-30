@@ -69,7 +69,7 @@ owned() {
                examples/mailbox_server/MailboxMesh.cpp examples/mailbox_server/SerialPiBackend.h
                examples/mailbox_server/SerialPiBackend.cpp test/test_rdm_mailbox_core/
                test/rdm_support/RdmSimMailbox.h test/rdm_support/RdmSimMailbox.cpp" ;;
-    wp8) echo "examples/mailbox_server/mbxd/ test/rdm_vectors/ test/rdm_support/MemMailboxBackend.h
+    wp8) echo "examples/mailbox_server/meshcore-mailboxd/ test/rdm_vectors/ test/rdm_support/MemMailboxBackend.h
                test/rdm_support/MemMailboxBackend.cpp test/test_rdm_mailbox_conformance/" ;;
     wp9) echo "test/test_rdm_scenarios/ test/rdm_support/RdmSimApp.h test/rdm_support/RdmScenario.h
                test/rdm_support/RdmScenario.cpp test/rdm_support/SubprocessBackend.h test/rdm_support/SubprocessBackend.cpp" ;;

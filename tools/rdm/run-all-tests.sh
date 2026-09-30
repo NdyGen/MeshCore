@@ -75,10 +75,6 @@ if [ $MBXD -eq 1 ]; then
       status=1; MBXD=0
     elif [ -n "${RDM_MBXD:-}" ]; then
       echo "   scenarios use RDM_MBXD=$RDM_MBXD (already set)"
-    elif [ -f examples/mailbox_server/mbxd/mbxd.py ]; then
-      # while mbxd.py is in the tree the C++ harness (SubprocessBackend) still spawns it under python3 and cannot
-      # run a binary; the rule goes when mbxd.py does
-      echo "   scenarios use examples/mailbox_server/mbxd/mbxd.py (still in the tree), not $DAEMON"
     else
       export RDM_MBXD="$DAEMON"
       echo "   scenarios use RDM_MBXD=$RDM_MBXD"
