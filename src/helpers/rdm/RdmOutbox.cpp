@@ -110,7 +110,7 @@ constexpr const char* Outbox::WATCH_PATH;
 
 Outbox::Outbox(RecordFile& file, RecordFile& watch, ContactTable& contacts, OutboxHost& host)
   : _file(file), _contacts(contacts), _host(host), _watch_file(watch), _n_slots(0), _n_watch(0), _tx_any(false),
-    _last_fw_tx(0) {
+    _last_fw_tx(0), _idle_until(0) {
   memset(_slots, 0, sizeof(_slots));
   memset(_peers, 0, sizeof(_peers));
   memset(_watch, 0, sizeof(_watch));
@@ -148,6 +148,7 @@ void Outbox::clearReq(Slot& s) {
 }
 
 bool Outbox::begin(uint32_t now) {
+  _idle_until = 0;
   _host.selfPub(_self);
   if (_file.open() == RecordFile::Open::FAILED || _file.payloadSize() != RECORD_SIZE) return false;
   if (_watch_file.open() == RecordFile::Open::FAILED || _watch_file.payloadSize() != WATCH_RECORD_SIZE) return false;
@@ -527,6 +528,7 @@ void Outbox::onQueryTimeout(uint8_t i, uint32_t now) {
 
 Outbox::SendResult Outbox::onAppSend(const uint8_t pub_prefix[6], uint32_t ts, uint8_t attempt, const char* text,
                                      size_t text_len, uint32_t now, uint32_t& app_ack_out, bool& transmit_out) {
+  _idle_until = 0;
   transmit_out = true;
   uint8_t ack[4];
   crypto::ackR(ack, ts, attempt & 3, text, text_len, _self);
@@ -575,6 +577,7 @@ Outbox::SendResult Outbox::onAppSend(const uint8_t pub_prefix[6], uint32_t ts, u
 }
 
 void Outbox::onAppTransmitted(const uint8_t pub_prefix[6], uint32_t ts, uint32_t est_timeout_ms, uint32_t now) {
+  _idle_until = 0;
   int found = -1;
   for (uint8_t i = 0; i < _n_slots; i++) {
     const Slot& s = _slots[i];
@@ -593,6 +596,7 @@ void Outbox::onAppTransmitted(const uint8_t pub_prefix[6], uint32_t ts, uint32_t
 }
 
 bool Outbox::addCtrl(const uint8_t pub_prefix[6], const uint8_t* ctrl_plain, size_t len, uint32_t now) {
+  _idle_until = 0;
   if (len < 7 || len - 5 > MAX_TEXT || ctrl_plain[4] != (TXT_TYPE_RDM_CTRL << 2)) return false;
   const uint8_t* body = ctrl_plain + 5;
   size_t body_len = len - 5;
@@ -633,6 +637,7 @@ bool Outbox::addCtrl(const uint8_t pub_prefix[6], const uint8_t* ctrl_plain, siz
 // ---- proofs and replies ----
 
 bool Outbox::onAck(const uint8_t* ack, uint8_t len, uint32_t now) {
+  _idle_until = 0;
   if (len < 4) return false;
   if (len >= 6) {
     for (uint8_t i = 0; i < _n_slots; i++) {
@@ -675,6 +680,7 @@ bool Outbox::onAck(const uint8_t* ack, uint8_t len, uint32_t now) {
 
 void Outbox::onQueryReply(const uint8_t pub_prefix[6], const QueryItem* asked, const QueryReply* r, uint8_t n,
                           uint32_t now) {
+  _idle_until = 0;
   setCap(pub_prefix, true);   // a RECEIPT_QUERY answer comes from a fork (03 par. 1b)
   resetDirectFails(pub_prefix);
   for (uint8_t k = 0; k < n; k++) {
@@ -721,6 +727,7 @@ void Outbox::onQueryReply(const uint8_t pub_prefix[6], const QueryItem* asked, c
 
 void Outbox::onDepositReply(MbxCode st, const uint8_t pkt_hash[8], uint32_t ttl_s, uint32_t now) {
   // matched on pkt_hash, which M echoes (also with an error code) and only the depositor can predict
+  _idle_until = 0;
   if (isZero(pkt_hash, 8)) return;
   for (uint8_t i = 0; i < _n_slots; i++) {
     Slot& s = _slots[i];
@@ -749,6 +756,7 @@ void Outbox::onDepositReply(MbxCode st, const uint8_t pkt_hash[8], uint32_t ttl_
 
 void Outbox::onStatusReply(const uint8_t pub_prefix[6], const uint8_t (*asked)[8], const StatusReply* r, uint8_t n,
                            uint32_t now) {
+  _idle_until = 0;
   for (uint8_t k = 0; k < n; k++) {
     for (uint8_t i = 0; i < _n_slots; i++) {
       Slot& s = _slots[i];
@@ -808,6 +816,7 @@ void Outbox::onStatusReply(const uint8_t pub_prefix[6], const uint8_t (*asked)[8
 }
 
 void Outbox::onRegisterReply(const uint8_t pub_prefix[6], MbxCode st, uint32_t now) {
+  _idle_until = 0;
   for (uint8_t i = 0; i < _n_slots; i++) {
     Slot& s = _slots[i];
     if (!s.used || s.e.state != OutState::REGISTER || s.req != REQ_REG ||
@@ -819,6 +828,7 @@ void Outbox::onRegisterReply(const uint8_t pub_prefix[6], MbxCode st, uint32_t n
 }
 
 void Outbox::onHeard(const uint8_t pub_prefix[6], bool had_cap_trailer, uint32_t now) {
+  _idle_until = 0;
   setCap(pub_prefix, had_cap_trailer);   // G15
   for (uint8_t i = 0; i < _n_slots; i++) {
     Slot& s = _slots[i];
@@ -837,6 +847,7 @@ void Outbox::onHeard(const uint8_t pub_prefix[6], bool had_cap_trailer, uint32_t
 }
 
 void Outbox::onMailboxAdvert(const uint8_t mbx_pub_prefix[6], uint32_t now) {
+  _idle_until = 0;
   for (uint8_t i = 0; i < _n_slots; i++) {
     Slot& s = _slots[i];
     if (!s.used || isCtrl(s.e) || !mailboxMatches(s.e.pub_prefix, mbx_pub_prefix)) continue;
@@ -854,6 +865,7 @@ void Outbox::onMailboxAdvert(const uint8_t mbx_pub_prefix[6], uint32_t now) {
 }
 
 void Outbox::onMailboxChanged(const uint8_t pub_prefix[6], uint32_t now) {
+  _idle_until = 0;
   const ContactRdm* c = _contacts.find(pub_prefix);
   bool has_mbx = c && (c->flags & CR_HAS_MBX);
   for (uint8_t i = 0; i < _n_slots; i++) {
@@ -889,6 +901,7 @@ void Outbox::onMailboxChanged(const uint8_t pub_prefix[6], uint32_t now) {
 
 void Outbox::onClientConnected(bool rdm_client, uint32_t now) {
   (void)now;
+  _idle_until = 0;
   for (uint8_t i = 0; i < _n_slots; i++) {
     Slot& s = _slots[i];
     if (!s.used || isCtrl(s.e)) continue;
@@ -1028,7 +1041,27 @@ uint32_t Outbox::nextDue(uint32_t now) const {
   return t == NEVER ? NEVER : (t > now ? t : now);
 }
 
+int Outbox::dueAction(uint32_t now, Action& a_out) const {
+  int best = -1;
+  uint32_t best_t = NEVER;
+  for (uint8_t i = 0; i < _n_slots; i++) {
+    for (uint8_t a = 0; a < ACT_COUNT; a++) {
+      uint32_t t = actionDue(i, (Action)a);
+      if (t <= now && t < best_t) {
+        best_t = t;
+        best = i;
+        a_out = (Action)a;
+      }
+    }
+  }
+  return best;
+}
+
 void Outbox::loop(uint32_t now) {
+  // All RDM time is in whole seconds and every public mutator drops the cache, so between two due moments the
+  // scans below would only repeat the same answer
+  if (now < _idle_until) return;
+  _idle_until = 0;
   for (uint8_t i = 0; i < _n_slots; i++) {
     Slot& s = _slots[i];
     if (!s.used) continue;
@@ -1060,24 +1093,21 @@ void Outbox::loop(uint32_t now) {
     }
   }
 
-  if (now < gapFree() || !_host.txIdle()) return;   // one outbox transmission per 60 s, only on an idle TX queue
+  bool tx_ok = now >= gapFree() && _host.txIdle();   // one outbox transmission per 60 s, only on an idle TX queue
   // every action that does not transmit moves its own schedule past `now`, so this terminates
   for (int guard = 0; guard < RDM_OUTBOX_SLOTS_MAX * ACT_COUNT * 2; guard++) {
-    int best = -1;
-    Action best_a = ACT_DM;
-    uint32_t best_t = NEVER;
-    for (uint8_t i = 0; i < _n_slots; i++) {
-      for (uint8_t a = 0; a < ACT_COUNT; a++) {
-        uint32_t t = actionDue(i, (Action)a);
-        if (t <= now && t < best_t) {
-          best_t = t;
-          best = i;
-          best_a = (Action)a;
-        }
+    Action a = ACT_DM;
+    int best = dueAction(now, a);
+    if (best < 0) {
+      // Only when nothing was held back by the gap, the TX queue or a host refusal: those can clear at any moment
+      if (guard == 0) {
+        uint32_t due = nextDue(now);
+        if (due > now) _idle_until = due;
       }
+      return;
     }
-    if (best < 0) return;
-    if (runAction((uint8_t)best, best_a, now)) {
+    if (!tx_ok) return;
+    if (runAction((uint8_t)best, a, now)) {
       _tx_any = true;
       _last_fw_tx = now;
       return;

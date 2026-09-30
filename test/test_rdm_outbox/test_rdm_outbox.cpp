@@ -54,6 +54,7 @@ public:
   std::vector<Tx> tx;
   std::vector<Pushed> status;
   std::vector<uint32_t> confirmed;
+  uint32_t idle_calls = 0;   // one per loop() that got as far as the transmit check
 
   FakeHost() { fillPattern(self, sizeof(self), 0xB0, 1); }
 
@@ -67,7 +68,10 @@ public:
     return contact;
   }
   bool hasDirectPath(const uint8_t*) override { return direct; }
-  bool txIdle() override { return idle; }
+  bool txIdle() override {
+    idle_calls++;
+    return idle;
+  }
   bool sendDm(const OutEntry& e, uint8_t attempt, bool flood, uint32_t& est) override {
     Tx t{Tx::DM, now, std::vector<uint8_t>(e.pub_prefix, e.pub_prefix + 6), e.ts, attempt, flood, {}, {}, {}};
     tx.push_back(t);
@@ -1642,6 +1646,91 @@ TEST_F(OutboxTest, G17_TwoNodesStartingTogetherDoNotStayInStep) {
   ASSERT_TRUE(ob2.onAck(a, 7, T0));
   EXPECT_EQ(ob->nextDue(T0), T0 + 3600);
   EXPECT_EQ(ob2.nextDue(T0), T0 + 3617);
+}
+
+// ---- loop() idle cache (D37) ----
+
+namespace {
+const uint8_t NOBODY[6] = {0xEE, 0xEE, 0xEE, 0xEE, 0xEE, 0xEE};
+
+struct Trace {
+  std::vector<std::string> tx, status;
+  std::vector<uint32_t> confirmed;
+  std::vector<OutState> states;
+  uint32_t idle_calls;
+};
+}
+
+// The cache never moves a transmission, a push or a state change to a later second. The reference run drops the
+// cache before every loop() with a mutator that changes nothing (an advert of an unknown mailbox); the same
+// scripted host events, replies and blocked periods happen in both runs, so the seeded random draws must line up.
+TEST_F(OutboxTest, NextWakeupIsNeverLate) {
+  auto run = [&](bool drop_cache) -> Trace {
+    io.wipeAll();
+    host.tx.clear();
+    host.status.clear();
+    host.confirmed.clear();
+    host.idle_calls = 0;
+    host.contact = host.direct = host.idle = host.send_ok = true;
+    host.lcg = true;
+    host.seq.s = 4711;
+    boot(T0);
+    setCap(CAROL);
+    const uint8_t DAVE[6] = {0xD1, 0xD2, 0xD3, 0xD4, 0xD5, 0xD6};
+    setMailbox(MBX1, DAVE);
+    send("to alice", 1);
+    send("probe carol", 2, 0, CAROL);
+    send("deposit dave", 3, 0, DAVE);
+    const uint32_t end = T0 + 3 * DAY;
+    for (uint32_t t = T0 + 1; t <= end; t++) {
+      now = host.now = t;
+      host.idle = !(t >= T0 + 100 && t < T0 + 400);        // TX queue busy while the first actions are due
+      host.contact = !(t >= T0 + 3000 && t < T0 + 3300);   // contact lookup fails around a DM
+      host.direct = t < T0 + DAY / 2;                       // path lost after half a day: floods
+      if (t == T0 + 5000) sendAck("to alice", true, 1);    // alice: ON_RADIO, receipt queries from now on
+      if (t == T0 + 200) {
+        const Tx* d = host.last(Tx::DEPOSIT);
+        if (d) ob->onDepositReply(MbxCode::OK, d->hash.data(), 2 * DAY, now);
+      }
+      if (t == T0 + DAY + 700) statusReply(MbxState::STORED, nullptr, 0, 2);
+      if (t == T0 + 2 * DAY + 100) ob->onHeard(CAROL, true, now);
+      if (t == T0 + 2 * DAY + 5000) ob->onMailboxAdvert(MBX1, now);
+      if (drop_cache) ob->onMailboxAdvert(NOBODY, now);
+      ob->loop(now);
+    }
+    Trace tr;
+    for (const Tx& x : host.tx) {
+      tr.tx.push_back(std::to_string(x.kind) + "@" + std::to_string(x.at - T0) + " " + std::to_string(x.prefix[0]) +
+                      " a" + std::to_string(x.attempt) + (x.flood ? " flood" : "") + " n" +
+                      std::to_string(x.items.size() + x.hashes.size()));
+    }
+    for (const Pushed& p : host.status) tr.status.push_back(std::to_string(p.e.ts) + ":" + std::to_string((int)p.s));
+    tr.confirmed = host.confirmed;
+    tr.states = allStates();
+    tr.idle_calls = host.idle_calls;
+    return tr;
+  };
+  Trace reference = run(true);
+  Trace cached = run(false);
+  EXPECT_EQ(cached.tx, reference.tx);
+  EXPECT_EQ(cached.status, reference.status);
+  EXPECT_EQ(cached.confirmed, reference.confirmed);
+  EXPECT_EQ(cached.states, reference.states);
+  EXPECT_GE(reference.tx.size(), 20u) << "the script must exercise DM backoff, floods, queries, STATUS and deposits";
+  EXPECT_TRUE(std::any_of(reference.tx.begin(), reference.tx.end(),
+                          [](const std::string& s) { return s.find("flood") != std::string::npos; }));
+  EXPECT_LT(cached.idle_calls * 20, reference.idle_calls) << "the cache skips the scans between due moments";
+}
+
+TEST_F(OutboxTest, IdleCacheDoesNotOutliveAMutator) {
+  send("hi");
+  timeout();   // RETRY, first DM at T0 + 30 + 60
+  loopAt(T0 + 40);
+  EXPECT_TRUE(host.tx.empty());
+  ob->onHeard(ALICE, true, now);   // G15: DM at once, inside a period the cache had marked idle
+  EXPECT_EQ(ob->nextDue(now), now);
+  loopAt(now);
+  EXPECT_EQ(host.count(Tx::DM), 1u);
 }
 
 // ---- hearing Alice (G15) ----
