@@ -1035,6 +1035,30 @@ TEST_F(OutboxTest, G6_BootKickRoundAfter60To120sThenSchedule) {
   EXPECT_EQ(host.tx[before + 1].at, kick + 60);
 }
 
+TEST_F(OutboxTest, BootPersistsOnlyRecordsWhoseStateChanged) {
+  host.rdm_client = false;
+  send("radio", 1);
+  sendAck("radio", true, 1);              // ON_RADIO: a boot leaves the record as it is
+  toCustody("custody");                   // CUSTODY: idem
+  uint32_t w0 = io.writeCalls();
+  boot(now + 100);
+  EXPECT_EQ(io.writeCalls(), w0) << "unchanged records are not rewritten";
+  EXPECT_EQ(state(0), OutState::ON_RADIO);
+  EXPECT_EQ(state(1), OutState::CUSTODY);
+
+  send("wait", 3);                        // WAIT_ACK: RETRY after a boot, so this one record is rewritten
+  uint32_t a = 0;
+  bool transmit = false;
+  w0 = io.writeCalls();
+  ASSERT_EQ(ob->onAppSend(ALICE, 3, 1, "wait", 4, now, a, transmit), Outbox::SendResult::EXISTING_ENTRY);
+  uint32_t one_record = io.writeCalls() - w0;   // a new app_ack is exactly one persist
+  ASSERT_GT(one_record, 0u);
+  w0 = io.writeCalls();
+  boot(now + 200);
+  EXPECT_EQ(io.writeCalls() - w0, one_record);
+  EXPECT_EQ(state(2), OutState::RETRY);
+}
+
 TEST_F(OutboxTest, G6_OnRadioScheduleResumesFromItsAnchorAfterReboot) {
   send("hi");
   sendAck("hi", true);

@@ -182,6 +182,7 @@ bool Outbox::begin(uint32_t now) {
 
     OutEntry& e = s.e;
     uint32_t age = now - e.created;
+    OutState before = e.state;
     if (isFinal(e.state)) {
       // nothing scheduled
     } else if (isCtrl(e)) {
@@ -224,7 +225,7 @@ bool Outbox::begin(uint32_t now) {
       }
     }
     s.reported = (uint8_t)toUserStatus(e.state) + 1;
-    persist(i);
+    if (e.state != before) persist(i);
   }
   for (uint8_t i = 0; i < _n_slots; i++) {
     if (_slots[i].used) releaseIfReported(i);
