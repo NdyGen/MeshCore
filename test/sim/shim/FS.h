@@ -62,7 +62,6 @@ public:
   const char* path() const { return _h ? _h->path.c_str() : ""; }
   bool isDirectory() const { return _h && _h->is_dir; }
   File openNextFile(const char* mode = "r");
-  void rewindDirectory() { if (_h) _h->dir_next = 0; }
 };
 
 class FS {
@@ -78,7 +77,6 @@ public:
   bool remove(const char* path);
   bool rename(const char* from, const char* to);
   bool mkdir(const char* path) { return true; }  // flat store: directories are implicit
-  bool rmdir(const char* path) { return true; }
   bool format() { store().wipe(); return true; }
   bool info(FSInfo& info);
   size_t totalBytes() { return store().capacity_bytes; }

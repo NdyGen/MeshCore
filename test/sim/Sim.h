@@ -59,6 +59,8 @@ struct FsWrite {
 
 // Return true to drop this transmission for receiver `to_index` (counted as a loss).
 using DropFilter = std::function<bool(const TxRecord& tx, int to_index)>;
+// Called once per transmission, right after its TxRecord is in tx_log() and before any receiver has it.
+using TxHook = std::function<void(const TxRecord& tx)>;
 
 class Simulator;
 class SimNode;
@@ -189,6 +191,7 @@ public:
   SimNode& operator=(const SimNode&) = delete;
 
   Simulator& sim() { return _sim; }
+  const Simulator& sim() const { return _sim; }
   const std::string& name() const { return _name; }
   int index() const { return _index; }
   bool powered() const { return _powered; }
@@ -234,11 +237,11 @@ class Simulator {
     uint32_t to_power_epoch;
   };
 
+  static constexpr uint32_t TICK_MS = 1;
+
   uint64_t _seed;
   uint64_t _now = 0;
-  uint32_t _tick = 1;
   uint32_t _start_epoch = DEFAULT_START_EPOCH;
-  bool _collisions = true;
   bool _trace = false;
   SimRNG _rng;
   std::vector<std::unique_ptr<SimNode>> _nodes;
@@ -248,8 +251,9 @@ class Simulator {
   std::vector<FsWrite> _fs_log;
   uint64_t _event_seq = 0;
   SimNode* _current = nullptr;
-  uint64_t _dropped_collision = 0, _dropped_loss = 0, _dropped_halfduplex = 0, _dropped_off = 0, _dropped_filter = 0;
+  uint64_t _dropped_collision = 0, _dropped_loss = 0, _dropped_off = 0, _dropped_filter = 0;
   std::vector<DropFilter> _drop_filters;
+  std::vector<TxHook> _tx_hooks;
   uint32_t _ff_max_step = 0;
   uint32_t _ff_settle = 40000;
   uint64_t _last_activity = 0;
@@ -284,9 +288,6 @@ public:
   void unlink(SimNode& a, SimNode& b);
   bool linked(const SimNode& from, const SimNode& to) const;
 
-  void set_collisions(bool enabled) { _collisions = enabled; }
-  void set_tick(uint32_t ms) { _tick = ms ? ms : 1; }
-  void set_trace(bool enabled) { _trace = enabled; }
   // Fast-forward: when the air is quiet for `settle_ms`, no node is busy() and no frame is pending, advance time
   // in steps of up to `max_step_ms` (bounded by every node's nextWakeupMs()). 0 disables (default: 1 ms ticks).
   // settle_ms covers delays the sim cannot see (flood rx delay up to 32 s, retransmit jitter).
@@ -294,9 +295,9 @@ public:
 
   // Targeted loss (e.g. "lose the next ACK from alice"): every filter is asked per transmission and receiver.
   void add_drop_filter(DropFilter f) { _drop_filters.push_back(std::move(f)); }
-  void clear_drop_filters() { _drop_filters.clear(); }
   // Drops the next `count` transmissions of `payload_type` (from/to -1 = any), then stops dropping.
   void drop_next(uint8_t payload_type, int from_index = -1, int to_index = -1, int count = 1);
+  void add_tx_hook(TxHook f) { _tx_hooks.push_back(std::move(f)); }
 
   void run_for(uint64_t ms);
   // Runs until pred() is true (checked every tick) or timeout; returns pred().
@@ -318,6 +319,9 @@ public:
 
   size_t node_count() const { return _nodes.size(); }
   SimNode& node(size_t i) { return *_nodes.at(i); }
+  // The node whose public key starts with these `len` bytes; -1 / nullptr if none.
+  int indexOfPrefix(const uint8_t* prefix, size_t len) const;
+  SimNode* nodeByPrefix(const uint8_t* prefix, size_t len);
   SimRNG& rng() { return _rng; }
   const std::vector<TxRecord>& tx_log() const { return _tx_log; }
   const std::vector<FsWrite>& fs_log() const { return _fs_log; }
@@ -326,7 +330,6 @@ public:
 
   uint64_t dropped_collision() const { return _dropped_collision; }
   uint64_t dropped_loss() const { return _dropped_loss; }
-  uint64_t dropped_halfduplex() const { return _dropped_halfduplex; }
   uint64_t dropped_off() const { return _dropped_off; }
   uint64_t dropped_filter() const { return _dropped_filter; }
 };

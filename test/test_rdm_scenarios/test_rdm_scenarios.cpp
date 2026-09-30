@@ -573,7 +573,7 @@ void runS07(Layout layout, bool real_mbxd, CompanionModel model = CompanionModel
 
   // M answers STORED only after the Pi committed: mbx.store (code 00) is there when M transmits the answer.
   int stored_answers = 0, stored_committed = 0;
-  onTransmit(w.s, [&](const TxRecord& tx) {
+  w.s.add_tx_hook([&](const TxRecord& tx) {
     if (tx.from != m.index()) return;
     const Wire& x = w.wires.all().back();
     if (x.effective() != Kind::DEPOSIT_RESP || depositCode(x) != rdm::MbxCode::OK) return;

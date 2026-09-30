@@ -261,6 +261,7 @@ void Simulator::traceTx(const SimNode& from, const uint8_t* bytes, int len) {
     printf("[%9.3fs] %-10s TX %-9s %s len=%d air=%ums\n", _now / 1000.0, from.name().c_str(),
            payloadTypeName(rec.payload_type), rec.flood ? "flood " : "direct", len, airtime_ms(len));
   }
+  for (auto& h : _tx_hooks) h(_tx_log.back());
 }
 
 void Simulator::transmit(SimNode& from, const uint8_t* bytes, int len) {
@@ -295,12 +296,10 @@ void Simulator::transmit(SimNode& from, const uint8_t* bytes, int len) {
     } else if (to.radio().isTransmitting()) {
       r.corrupted = DROP_HALFDUPLEX;
     }
-    if (_collisions) {
-      for (auto& other : _in_flight) {
-        if (other.to == r.to && other.end > r.start) {
-          if (other.corrupted == DROP_NONE) other.corrupted = DROP_COLLISION;
-          if (r.corrupted == DROP_NONE) r.corrupted = DROP_COLLISION;
-        }
+    for (auto& other : _in_flight) {
+      if (other.to == r.to && other.end > r.start) {
+        if (other.corrupted == DROP_NONE) other.corrupted = DROP_COLLISION;
+        if (r.corrupted == DROP_NONE) r.corrupted = DROP_COLLISION;
       }
     }
     if (r.loss > 0.0f && _rng.uniform() < r.loss && r.corrupted == DROP_NONE) r.corrupted = DROP_LOSS;
@@ -339,7 +338,7 @@ void Simulator::deliverDue() {
         }
         break;
       case DROP_COLLISION: _dropped_collision++; break;
-      case DROP_HALFDUPLEX: _dropped_halfduplex++; break;
+      case DROP_HALFDUPLEX: break;
       case DROP_OFF: _dropped_off++; break;
       case DROP_LOSS: _dropped_loss++; break;
       case DROP_FILTER: _dropped_filter++; break;
@@ -357,14 +356,14 @@ bool Simulator::idle() const {
 }
 
 uint64_t Simulator::nextStep() const {
-  if (_ff_max_step == 0 || !idle()) return _tick;
+  if (_ff_max_step == 0 || !idle()) return TICK_MS;
   uint64_t step = _ff_max_step;
   for (const auto& n : _nodes) {
     if (!n->powered()) continue;
     uint64_t w = n->nextWakeupMs();
-    if (w != UINT64_MAX) step = std::min(step, w > _now ? w - _now : (uint64_t)_tick);
+    if (w != UINT64_MAX) step = std::min(step, w > _now ? w - _now : (uint64_t)TICK_MS);
   }
-  return std::max<uint64_t>(step, _tick);
+  return std::max<uint64_t>(step, TICK_MS);
 }
 
 void Simulator::drop_next(uint8_t payload_type, int from_index, int to_index, int count) {
@@ -418,6 +417,18 @@ bool Simulator::run_until(const std::function<bool()>& pred, uint64_t timeout_ms
 
 void Simulator::log_fs_write(int node, const std::string& path, uint32_t off, uint32_t len, bool complete) {
   _fs_log.push_back(FsWrite{_event_seq++, _now, node, path, off, len, complete});
+}
+
+int Simulator::indexOfPrefix(const uint8_t* prefix, size_t len) const {
+  for (size_t i = 0; i < _nodes.size(); i++) {
+    if (memcmp(_nodes[i]->identity().pub_key, prefix, len) == 0) return (int)i;
+  }
+  return -1;
+}
+
+SimNode* Simulator::nodeByPrefix(const uint8_t* prefix, size_t len) {
+  int i = indexOfPrefix(prefix, len);
+  return i < 0 ? nullptr : _nodes[(size_t)i].get();
 }
 
 size_t Simulator::count_tx(int from_index, int payload_type) const {
