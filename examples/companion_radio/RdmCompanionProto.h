@@ -4,6 +4,7 @@
 // test clients use the same encoding. Header-only on purpose: the companion envs build examples/companion_radio/*.cpp,
 // so a separate .cpp would add an object to builds without WITH_RELIABLE_DM.
 
+#include <helpers/rdm/RdmBytes.h>
 #include <helpers/rdm/RdmInbox.h>
 #include <helpers/rdm/RdmOutbox.h>
 #include <helpers/rdm/RdmTypes.h>
@@ -39,13 +40,6 @@ constexpr size_t OUTBOX_END_LEN     = 1;
 constexpr size_t SET_MAILBOX_LEN    = 1 + 32 + 16;
 constexpr size_t SEND_CONFIRMED_LEN = 9;
 constexpr size_t MAX_APP_FRAME      = 176;   // MAX_FRAME_SIZE (BaseSerialInterface.h)
-
-inline void put32(uint8_t* p, uint32_t v) {
-  p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
-}
-inline uint32_t get32(const uint8_t* p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
 
 // ---- PUSH_CODE_RDM_STATUS: 0x91 | app_ack(4) | UserStatus(1) | K(4) | ts(4) | pub_prefix(6) ----
 

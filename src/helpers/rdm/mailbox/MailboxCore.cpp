@@ -1,5 +1,6 @@
 #include "MailboxCore.h"
 
+#include <helpers/rdm/RdmBytes.h>
 #include <helpers/rdm/RdmCodec.h>
 #include <helpers/rdm/RdmConfig.h>
 #include <helpers/rdm/RdmCrypto.h>
@@ -18,10 +19,6 @@ const uint32_t ANON_WINDOW_MS = 60000;
 const uint8_t  ANON_PER_WINDOW = 4;           // global, like anon_limiter in PR #3078
 
 bool due(uint32_t now, uint32_t at) { return (int32_t)(now - at) >= 0; }
-
-uint32_t get32(const uint8_t* p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
 
 }
 

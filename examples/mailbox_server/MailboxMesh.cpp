@@ -1,7 +1,7 @@
 #include "MailboxMesh.h"
 
 #include <helpers/AdvertDataHelpers.h>
-#include <helpers/rdm/RdmConfig.h>
+#include <helpers/rdm/RdmPolicy.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -47,10 +47,9 @@ void MailboxMesh::loop() {
   if (millisHasNowPassed(_next_advert)) {
     // Clients use M's advert as a hint to FETCH or ask STATUS, and to learn a path.
     sendSelfAdvert(true);
-    // G17: I + U[0, min(I / 10, 60 s)], drawn per interval, so M's adverts do not fall in step with other timers.
+    // G17: I + U[0, jitterMax(I)], drawn per interval, so M's adverts do not fall in step with other timers.
     uint32_t interval_s = MBX_FLOOD_ADVERT_INTERVAL_S;
-    uint32_t jitter_max = interval_s / RDM_JITTER_DIV < RDM_JITTER_MAX_S ? interval_s / RDM_JITTER_DIV : RDM_JITTER_MAX_S;
-    interval_s += getRNG()->nextInt(0, jitter_max + 1);
+    interval_s += getRNG()->nextInt(0, rdm::jitterMax(interval_s) + 1);
     _next_advert = futureMillis((int)(interval_s * 1000UL));
   }
 }
