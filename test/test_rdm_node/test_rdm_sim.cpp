@@ -11,7 +11,7 @@ using rdm::UserStatus;
 
 namespace {
 
-// The app connects and, as an RDM client, sends CMD_RDM_ENABLE; like RdmSimCompanion::connect(true) did in one call.
+// The app connects and, as an RDM client, sends CMD_RDM_ENABLE.
 void connectRdm(CompanionNode& n) {
   n.app().connect();
   ASSERT_TRUE(enableRdm(n)) << n.name() << ": CMD_RDM_ENABLE";
@@ -34,7 +34,7 @@ int sendText(CompanionNode& from, const SimNode& to, const std::string& text, ui
 
 uint32_t ackOf(CompanionNode& n, int id) { return n.app().sent(id).expected_ack; }
 
-// The outbox took the message (RdmSimCompanion::Sent::handled): an entry exists for its recipient and timestamp.
+// The outbox took the message: an entry exists for its recipient and timestamp.
 bool handled(CompanionNode& n, const SimNode& to, int id) { return outState(n, to, n.app().sent(id).timestamp) >= 0; }
 
 // First transmission of `from` at or after `t` that carries an ACK (plain ACK, or PATH with the ACK inside).

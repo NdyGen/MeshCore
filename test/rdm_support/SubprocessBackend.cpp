@@ -47,7 +47,7 @@ pid_t spawn(const std::vector<std::string>& argv, int* to_child, int* from_child
   return pid;
 }
 
-// A .py path runs under python3 (transition while mbxd.py is still in the tree); anything else is executed directly.
+// A .py path runs under python3 (transition while the Python daemon is still in the tree); anything else is executed directly.
 std::vector<std::string> daemonArgv(const std::string& mbxd, std::vector<std::string> args) {
   std::vector<std::string> argv;
   if (mbxd.size() > 3 && mbxd.compare(mbxd.size() - 3, 3, ".py") == 0) argv.push_back("python3");
