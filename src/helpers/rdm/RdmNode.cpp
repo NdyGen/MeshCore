@@ -1,5 +1,6 @@
 #include "RdmNode.h"
 
+#include "RdmBytes.h"
 #include "RdmCodec.h"
 #include "RdmCrypto.h"
 
@@ -11,55 +12,24 @@ namespace {
 
 const uint8_t FORMAT_VER = 1;
 
-struct Plan { uint16_t outbox, watch, contacts, inbox, reg; };
-const Plan PLAN_MAX = { RDM_OUTBOX_SLOTS_MAX, RDM_WATCH_SLOTS_MAX, RDM_CONTACT_SLOTS_MAX, RDM_INBOX_SLOTS_MAX,
-                        RDM_REGISTER_SLOTS_MAX };
-const Plan PLAN_MIN = { 4, 8, 8, 8, 32 };
-
-uint32_t planBytes(const Plan& p) {
-  return RecordFile::fileSize(Outbox::RECORD_SIZE, p.outbox, true) +
-         RecordFile::fileSize(Outbox::WATCH_RECORD_SIZE, p.watch, false) +
-         RecordFile::fileSize(ContactTable::RECORD_SIZE, p.contacts, true) +
-         RecordFile::fileSize(Inbox::RECORD_SIZE, p.inbox, false) +
-         RecordFile::fileSize(Inbox::REG_RECORD_SIZE, p.reg, true) + RecordFile::fileSize(Clock::RECORD_SIZE, 1, true) +
-         RecordFile::fileSize(Node::MBX_RECORD_SIZE, 1, true);
-}
-
 uint16_t scaled(uint16_t max, uint16_t min, uint64_t num, uint64_t den) {
   uint64_t v = (uint64_t)max * num / den;
   if (v < min) v = min;
   return (uint16_t)(v > max ? max : v);
 }
 
-// Slot count of an existing file with the same payload size, so a later change in free space (other data
-// growing) never migrates records away. 0: no usable file.
-uint16_t existingSlots(FileIO& io, const char* path, uint16_t payload, uint16_t max) {
-  uint8_t h[16];
-  if (io.size(path) < 16 || !io.read(path, 0, h, sizeof(h)) || memcmp(h, "RDMF", 4) != 0) return 0;
-  if ((uint16_t)(h[6] | (h[7] << 8)) != payload) return 0;
-  uint16_t slots = (uint16_t)(h[8] | (h[9] << 8));
-  return slots > max ? max : slots;
-}
-
-uint32_t existingBytes(FileIO& io) {
-  const char* const paths[] = { Clock::PATH, ContactTable::PATH, Outbox::PATH, Outbox::WATCH_PATH, Inbox::PATH,
-                                Inbox::REG_PATH, Node::MBX_PATH };
-  uint32_t n = 0;
-  for (const char* p : paths) {
-    int32_t s = io.size(p);
-    if (s > 0) n += (uint32_t)s;
-  }
-  return n;
-}
-
-bool isZero(const uint8_t* p, size_t n) {
-  for (size_t i = 0; i < n; i++)
-    if (p[i]) return false;
+// A parsed DM as the inbox takes it. Only a plain text (txt_type 0) that fits an inbox record is accepted.
+bool toRecvInput(const codec::TxtParsed& p, const uint8_t* sender, RecvInput& out) {
+  if (p.txt_type != 0 || p.text_len > INBOX_TEXT_MAX) return false;
+  memset(&out, 0, sizeof(out));
+  out.sender_pub = sender;
+  out.ts = p.ts;
+  out.flags = p.flags;
+  out.txt_type = p.txt_type;
+  out.text = p.text;
+  out.text_len = (uint8_t)p.text_len;
+  out.sender_cap = p.cap;
   return true;
-}
-
-uint32_t get32(const uint8_t* p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 }  // namespace
@@ -67,6 +37,48 @@ uint32_t get32(const uint8_t* p) {
 // Out-of-class definitions for C++11 builds (nRF52): Node binds these members to references.
 constexpr uint16_t    Node::MBX_RECORD_SIZE;
 constexpr const char* Node::MBX_PATH;
+
+const Node::FileSpec Node::FILES[Node::N_FILES] = {
+  { Clock::PATH,        Clock::RECORD_SIZE,        true,  1,                      1 },
+  { ContactTable::PATH, ContactTable::RECORD_SIZE, true,  RDM_CONTACT_SLOTS_MAX,  8 },
+  { Outbox::PATH,       Outbox::RECORD_SIZE,       true,  RDM_OUTBOX_SLOTS_MAX,   4 },
+  { Outbox::WATCH_PATH, Outbox::WATCH_RECORD_SIZE, false, RDM_WATCH_SLOTS_MAX,    8 },
+  { Inbox::PATH,        Inbox::RECORD_SIZE,        false, RDM_INBOX_SLOTS_MAX,    8 },
+  { Inbox::REG_PATH,    Inbox::REG_RECORD_SIZE,    true,  RDM_REGISTER_SLOTS_MAX, 32 },
+  { Node::MBX_PATH,     Node::MBX_RECORD_SIZE,     true,  1,                      1 },
+};
+
+// Slot count per file for one boot. A usable file already on flash keeps its slot count, so a later change in
+// free space (other data growing) never migrates records away; its bytes count towards the budget. The others
+// scale between min and max with the budget: files take at most half of the flash that is free for RDM
+// (03 par. 6), the rest stays for contacts, prefs and blobs.
+struct Node::StoragePlan {
+  uint16_t slots[N_FILES];
+  uint32_t existing_bytes;
+
+  explicit StoragePlan(FileIO& io) : existing_bytes(0) {
+    for (uint8_t i = 0; i < N_FILES; i++) slots[i] = existingSlots(io, FILES[i]);
+  }
+
+  void fit(uint32_t budget) {
+    uint64_t full = 0;
+    for (uint8_t i = 0; i < N_FILES; i++) full += RecordFile::fileSize(FILES[i].size, FILES[i].max, FILES[i].ab);
+    uint64_t target = budget / 2;
+    uint64_t num = target < full ? target : full;
+    for (uint8_t i = 0; i < N_FILES; i++)
+      if (slots[i] == 0) slots[i] = scaled(FILES[i].max, FILES[i].min, num, full);
+  }
+
+private:
+  // 0: no usable file (missing, another record size). The one size() call also feeds existing_bytes.
+  uint16_t existingSlots(FileIO& io, const FileSpec& f) {
+    int32_t size = io.size(f.path);
+    if (size > 0) existing_bytes += (uint32_t)size;
+    uint16_t payload, slots;
+    if (size < 16 || !detail::peekLayout(io, f.path, payload, slots) || payload != f.size) return 0;
+    return slots > f.max ? f.max : slots;
+  }
+};
 
 Node::Node(FileIO& io, NodeMeshHost& mesh, NodeAppSink& app) : _io(io), _mesh(mesh), _app(app) {
   memset(_own_mbx, 0, sizeof(_own_mbx));
@@ -83,17 +95,10 @@ void Node::shutdown() {
   _inbox.reset();
   _clock.reset();
   _contacts.reset();
-  _f_mbx.reset();
-  _f_reg.reset();
-  _f_inbox.reset();
-  _f_watch.reset();
-  _f_outbox.reset();
-  _f_contacts.reset();
-  _f_meta.reset();
+  for (uint8_t i = N_FILES; i-- > 0;) _files[i].reset();
 }
 
-// Files take at most half of the flash that is free for RDM (03 par. 6): the rest stays for contacts, prefs
-// and blobs. Below RDM_MIN_FREE_BYTES RDM stays off and the node behaves like upstream.
+// Below RDM_MIN_FREE_BYTES RDM stays off and the node behaves like upstream.
 bool Node::begin() {
   shutdown();
   _n_hidden = 0;
@@ -101,34 +106,17 @@ bool Node::begin() {
   memset(_pending, 0, sizeof(_pending));
   memset(_gap, 0, sizeof(_gap));
 
-  uint32_t budget = _io.freeBytes() + existingBytes(_io);
+  StoragePlan plan(_io);
+  uint32_t budget = _io.freeBytes() + plan.existing_bytes;
   if (budget < RDM_MIN_FREE_BYTES) return false;
-  uint64_t full = planBytes(PLAN_MAX), target = budget / 2;
-  uint64_t num = target < full ? target : full;
-  Plan p;
-  p.outbox   = scaled(PLAN_MAX.outbox, PLAN_MIN.outbox, num, full);
-  p.watch    = scaled(PLAN_MAX.watch, PLAN_MIN.watch, num, full);
-  p.contacts = scaled(PLAN_MAX.contacts, PLAN_MIN.contacts, num, full);
-  p.inbox    = scaled(PLAN_MAX.inbox, PLAN_MIN.inbox, num, full);
-  p.reg      = scaled(PLAN_MAX.reg, PLAN_MIN.reg, num, full);
-  if (uint16_t s = existingSlots(_io, Outbox::PATH, Outbox::RECORD_SIZE, PLAN_MAX.outbox)) p.outbox = s;
-  if (uint16_t s = existingSlots(_io, Outbox::WATCH_PATH, Outbox::WATCH_RECORD_SIZE, PLAN_MAX.watch)) p.watch = s;
-  if (uint16_t s = existingSlots(_io, ContactTable::PATH, ContactTable::RECORD_SIZE, PLAN_MAX.contacts)) p.contacts = s;
-  if (uint16_t s = existingSlots(_io, Inbox::PATH, Inbox::RECORD_SIZE, PLAN_MAX.inbox)) p.inbox = s;
-  if (uint16_t s = existingSlots(_io, Inbox::REG_PATH, Inbox::REG_RECORD_SIZE, PLAN_MAX.reg)) p.reg = s;
+  plan.fit(budget);
+  for (uint8_t i = 0; i < N_FILES; i++)
+    _files[i].make(_io, FILES[i].path, FORMAT_VER, FILES[i].size, plan.slots[i], FILES[i].ab);
 
-  RecordFile& meta = _f_meta.make(_io, Clock::PATH, FORMAT_VER, Clock::RECORD_SIZE, (uint16_t)1, true);
-  RecordFile& cf   = _f_contacts.make(_io, ContactTable::PATH, FORMAT_VER, ContactTable::RECORD_SIZE, p.contacts, true);
-  RecordFile& of   = _f_outbox.make(_io, Outbox::PATH, FORMAT_VER, Outbox::RECORD_SIZE, p.outbox, true);
-  RecordFile& wf   = _f_watch.make(_io, Outbox::WATCH_PATH, FORMAT_VER, Outbox::WATCH_RECORD_SIZE, p.watch, false);
-  RecordFile& inf  = _f_inbox.make(_io, Inbox::PATH, FORMAT_VER, Inbox::RECORD_SIZE, p.inbox, false);
-  RecordFile& rf   = _f_reg.make(_io, Inbox::REG_PATH, FORMAT_VER, Inbox::REG_RECORD_SIZE, p.reg, true);
-  _f_mbx.make(_io, MBX_PATH, FORMAT_VER, MBX_RECORD_SIZE, (uint16_t)1, true);
-
-  ContactTable& contacts = _contacts.make(cf);
-  Clock& clock = _clock.make(meta);
-  Inbox& inbox = _inbox.make(inf, rf, contacts, static_cast<InboxHost&>(*this));
-  Outbox& outbox = _outbox.make(of, wf, contacts, static_cast<OutboxHost&>(*this));
+  ContactTable& contacts = _contacts.make(_files[F_CONTACTS].get());
+  Clock& clock = _clock.make(_files[F_META].get());
+  Inbox& inbox = _inbox.make(_files[F_INBOX].get(), _files[F_REG].get(), contacts, static_cast<InboxHost&>(*this));
+  Outbox& outbox = _outbox.make(_files[F_OUTBOX].get(), _files[F_WATCH].get(), contacts, static_cast<OutboxHost&>(*this));
   Fetcher& fetcher = _fetcher.make(inbox, static_cast<FetcherHost&>(*this));
 
   bool recreated = false;
@@ -222,17 +210,8 @@ RecvDecision Node::onPlainTxt(const uint8_t sender_pub[32], const uint8_t* data,
   memset(&d, 0, sizeof(d));
   d.result = RecvResult::STORE_ERROR;
   codec::TxtParsed p;
-  if (!enabled() || !codec::parseTxtPlain(data, len, p) || p.txt_type != 0 || p.text_len > INBOX_TEXT_MAX) return d;
-
   RecvInput in;
-  memset(&in, 0, sizeof(in));
-  in.sender_pub = sender_pub;
-  in.ts = p.ts;
-  in.flags = p.flags;
-  in.txt_type = p.txt_type;
-  in.text = p.text;
-  in.text_len = (uint8_t)p.text_len;
-  in.sender_cap = p.cap;
+  if (!enabled() || !codec::parseTxtPlain(data, len, p) || !toRecvInput(p, sender_pub, in)) return d;
   in.path_len = path_len;
   in.snr_x4 = snr_x4;
   uint32_t t = now();
@@ -349,19 +328,11 @@ void Node::onFetchResponse(const uint8_t* body, size_t len) {
     uint8_t sender[32], plain[MAX_INNER_PAYLOAD];
     size_t plain_len = sizeof(plain);
     codec::TxtParsed p;
+    RecvInput in;
     if (!_mesh.decryptTxtPayload(inner, inner_len, sender, plain, plain_len) || !codec::parseTxtPlain(plain, plain_len, p) ||
-        p.txt_type != 0 || p.text_len > INBOX_TEXT_MAX) {
+        !toRecvInput(p, sender, in)) {
       ib.onUndecryptable(hash);
     } else {
-      RecvInput in;
-      memset(&in, 0, sizeof(in));
-      in.sender_pub = sender;
-      in.ts = p.ts;
-      in.flags = p.flags;
-      in.txt_type = p.txt_type;
-      in.text = p.text;
-      in.text_len = (uint8_t)p.text_len;
-      in.sender_cap = p.cap;
       in.via_mailbox = true;
       in.mbx_hash = hash;
       in.path_len = 0xFF;
@@ -407,7 +378,7 @@ void Node::onClientDisconnected() {
 }
 
 bool Node::loadOwnMailbox() {
-  RecordFile& f = _f_mbx.get();
+  RecordFile& f = _files[F_MBX].get();
   if (f.open() == RecordFile::Open::FAILED) return false;
   uint8_t rec[MBX_RECORD_SIZE];
   _has_own_mbx = f.read(0, rec) && !isZero(rec, 32);
@@ -426,7 +397,7 @@ bool Node::setOwnMailbox(const uint8_t* mbx_pub, const uint8_t* k_owner) {
   if (set && _has_own_mbx && memcmp(_own_mbx, mbx_pub, 32) == 0 && memcmp(_k_owner, k_owner, 16) == 0) return true;
   if (!set && !_has_own_mbx) return true;
 
-  RecordFile& f = _f_mbx.get();
+  RecordFile& f = _files[F_MBX].get();
   if (set) {
     uint8_t rec[MBX_RECORD_SIZE];
     memcpy(rec, mbx_pub, 32);
@@ -476,12 +447,9 @@ bool Node::setOwnMailbox(const uint8_t* mbx_pub, const uint8_t* k_owner) {
 uint8_t Node::listOutbox(OutEntry* out, uint8_t max, uint8_t offset) {
   if (!enabled()) return 0;
   Outbox& ob = _outbox.get();
-  uint8_t n = 0, seen = 0;
-  for (uint8_t i = 0; i < ob.count() && n < max; i++) {
-    if (!ob.get(i, out[n])) continue;
-    if (seen++ < offset) continue;
-    n++;
-  }
+  uint8_t n = 0;
+  // get() succeeds for every index below count(); that guard also keeps offset + n from wrapping
+  for (; n < max && offset + n < ob.count() && ob.get((uint8_t)(offset + n), out[n]); n++) {}
   return n;
 }
 
@@ -560,9 +528,15 @@ void Node::noteReq(const uint8_t mbx_pub[32]) {
   slot->used = true;
 }
 
+uint32_t Node::reqTag() {
+  bool trusted = false;
+  return _clock.get().nextReqTimestamp(_app.rtcNow(trusted));
+}
+
 // Replies are matched on tag and peer; an old entry is overwritten after PENDING_MAX newer REQs, which is
 // harmless: Outbox and Fetcher run their own time-outs and treat a missing reply like a lost one.
-Node::Pending* Node::addPending(uint8_t kind, uint32_t tag, const uint8_t peer_pub[32]) {
+Node::Pending* Node::track(uint8_t kind, uint32_t tag, const uint8_t peer_pub[32], bool to_mailbox) {
+  if (to_mailbox) noteReq(peer_pub);
   Pending* p = &_pending[_next_pending];
   _next_pending = (uint8_t)((_next_pending + 1) % PENDING_MAX);
   memset(p, 0, sizeof(*p));
@@ -576,11 +550,9 @@ bool Node::sendTracked(uint8_t kind, const uint8_t peer_pub[32], const uint8_t* 
                        uint32_t& est_timeout_ms, Pending** out) {
   bool to_mailbox = kind != REQ_QUERY;
   if (to_mailbox && !reqAllowed(peer_pub)) return false;
-  bool trusted = false;
-  uint32_t tag = _clock.get().nextReqTimestamp(_app.rtcNow(trusted));
+  uint32_t tag = reqTag();
   if (!_mesh.sendReq(peer_pub, tag, body, len, flood, est_timeout_ms)) return false;
-  if (to_mailbox) noteReq(peer_pub);
-  Pending* p = addPending(kind, tag, peer_pub);
+  Pending* p = track(kind, tag, peer_pub, to_mailbox);
   if (out) *out = p;
   return true;
 }
@@ -654,14 +626,11 @@ bool Node::sendStatus(const uint8_t pub_prefix[6], const uint8_t (*hashes)[8], u
 bool Node::sendRegister(const uint8_t pub_prefix[6], uint32_t& est_timeout_ms) {
   uint8_t mbx[32], token[8];
   if (!contactMailbox(pub_prefix, mbx, token) || !reqAllowed(mbx)) return false;
-  bool trusted = false;
-  uint32_t tag = _clock.get().nextReqTimestamp(_app.rtcNow(trusted));
+  uint32_t tag = reqTag();
   uint8_t plain[32];
   size_t len = codec::buildRegReq(plain, tag, pub_prefix, token);
   if (!len || !_mesh.sendAnonReq(mbx, plain, len, est_timeout_ms)) return false;
-  noteReq(mbx);
-  Pending* p = addPending(REQ_REGISTER, tag, mbx);
-  memcpy(p->contact, pub_prefix, 6);
+  memcpy(track(REQ_REGISTER, tag, mbx, true)->contact, pub_prefix, 6);
   return true;
 }
 

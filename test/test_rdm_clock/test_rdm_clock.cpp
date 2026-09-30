@@ -18,7 +18,7 @@ const uint32_t PERSIST_MS = RDM_CLOCK_PERSIST_S * 1000;
 struct Boot {
   RecordFile meta;
   Clock clock;
-  explicit Boot(MemFileIO& io) : meta(io, "/rdm/meta", 1, 12, 1, true), clock(meta) {}
+  explicit Boot(MemFileIO& io) : meta(io, Clock::PATH, 1, Clock::RECORD_SIZE, 1, true), clock(meta) {}
 };
 
 }

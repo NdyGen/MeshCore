@@ -105,6 +105,12 @@ private:
     const T& get() const { return *reinterpret_cast<const T*>(_buf); }
   };
 
+  // One record file per module; slot counts follow the flash budget at begin() (StoragePlan in RdmNode.cpp).
+  struct FileSpec { const char* path; uint16_t size; bool ab; uint16_t max, min; };
+  enum : uint8_t { F_META, F_CONTACTS, F_OUTBOX, F_WATCH, F_INBOX, F_REG, F_MBX, N_FILES };
+  static const FileSpec FILES[N_FILES];
+  struct StoragePlan;
+
   enum : uint8_t { REQ_NONE = 0, REQ_QUERY, REQ_DEPOSIT, REQ_STATUS, REQ_REGISTER, REQ_FETCH };
   struct Pending {                  // REQ waiting for its RESPONSE; tag = REQ timestamp
     uint8_t  kind;
@@ -117,7 +123,7 @@ private:
   static const uint8_t PENDING_MAX = 16;
   struct MbxGap { uint8_t prefix[6]; uint32_t last; bool used; };
 
-  Late<RecordFile>   _f_meta, _f_contacts, _f_outbox, _f_watch, _f_inbox, _f_reg, _f_mbx;
+  Late<RecordFile>   _files[N_FILES];
   Late<ContactTable> _contacts;
   Late<Clock>        _clock;
   Late<Inbox>        _inbox;
@@ -142,7 +148,8 @@ private:
   bool     contactMailbox(const uint8_t contact_prefix[6], uint8_t mbx_pub[32], uint8_t token[8]);
   bool     reqAllowed(const uint8_t mbx_pub[32]);
   void     noteReq(const uint8_t mbx_pub[32]);
-  Pending* addPending(uint8_t kind, uint32_t tag, const uint8_t peer_pub[32]);
+  uint32_t reqTag();                          // next REQ timestamp (K2), also the tag of its RESPONSE
+  Pending* track(uint8_t kind, uint32_t tag, const uint8_t peer_pub[32], bool to_mailbox);
   bool     sendTracked(uint8_t kind, const uint8_t peer_pub[32], const uint8_t* body, size_t len, bool flood,
                        uint32_t& est_timeout_ms, Pending** out);
   void     onFetchResponse(const uint8_t* body, size_t len);

@@ -1,5 +1,6 @@
 #include "RdmInbox.h"
 
+#include "RdmBytes.h"
 #include "RdmCrypto.h"
 
 #include <string.h>
@@ -18,17 +19,10 @@ constexpr uint8_t IX_SYNCED  = 0x02;      // register
 constexpr uint8_t IX_PENDING = 0x04;      // register
 constexpr uint8_t IX_OFFERED = 0x02;      // inbox: handed to the app on this connection
 
-void putU32(uint8_t* p, uint32_t v) {
-  p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
-}
-uint32_t getU32(const uint8_t* p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
 void packIn(const InRecord& r, uint8_t* p) {
   memcpy(p, r.sender_prefix, 6);
-  putU32(p + 6, r.ts);
-  putU32(p + 10, r.recv_time);
+  put32(p + 6, r.ts);
+  put32(p + 10, r.recv_time);
   p[14] = r.txt_type;
   p[15] = r.path_len;
   p[16] = (uint8_t)r.snr_x4;
@@ -40,8 +34,8 @@ void packIn(const InRecord& r, uint8_t* p) {
 
 void unpackIn(const uint8_t* p, InRecord& r) {
   memcpy(r.sender_prefix, p, 6);
-  r.ts = getU32(p + 6);
-  r.recv_time = getU32(p + 10);
+  r.ts = get32(p + 6);
+  r.recv_time = get32(p + 10);
   r.txt_type = p[14];
   r.path_len = p[15];
   r.snr_x4 = (int8_t)p[16];
@@ -54,27 +48,26 @@ void unpackIn(const uint8_t* p, InRecord& r) {
 
 void packReg(const RegRecord& r, uint8_t* p) {
   memcpy(p, r.sender_prefix, 6);
-  putU32(p + 6, r.ts);
+  put32(p + 6, r.ts);
   memcpy(p + 10, r.key, 4);
   memcpy(p + 14, r.ack_r, 4);
   memcpy(p + 18, r.ack_s, 6);
   p[24] = r.state;
   p[25] = r.flags;
   memcpy(p + 26, r.mbx_hash, 8);
-  p[34] = (uint8_t)r.inbox_slot;
-  p[35] = (uint8_t)(r.inbox_slot >> 8);
+  put16(p + 34, r.inbox_slot);
 }
 
 void unpackReg(const uint8_t* p, RegRecord& r) {
   memcpy(r.sender_prefix, p, 6);
-  r.ts = getU32(p + 6);
+  r.ts = get32(p + 6);
   memcpy(r.key, p + 10, 4);
   memcpy(r.ack_r, p + 14, 4);
   memcpy(r.ack_s, p + 18, 6);
   r.state = p[24];
   r.flags = p[25];
   memcpy(r.mbx_hash, p + 26, 8);
-  r.inbox_slot = (uint16_t)(p[34] | (p[35] << 8));
+  r.inbox_slot = get16(p + 34);
 }
 
 bool samePrefix(const uint8_t* a, const uint8_t* b) { return memcmp(a, b, 6) == 0; }
@@ -130,16 +123,6 @@ bool Inbox::begin(bool& recreated_out) {
   _reg_slots = _reg.slots() < RDM_REGISTER_SLOTS_MAX ? _reg.slots() : RDM_REGISTER_SLOTS_MAX;
 
   uint8_t buf[RECORD_SIZE];
-  for (uint16_t i = 0; i < _reg_slots; i++) {
-    if (!_reg.read(i, buf)) continue;
-    RegRecord r;
-    unpackReg(buf, r);
-    RegIdx& x = _reg_idx[i];
-    x.ts = r.ts;
-    memcpy(x.key, r.key, 4);
-    x.inbox_slot = r.inbox_slot;
-    x.flags = regIdxFlags(r);
-  }
   for (uint16_t i = 0; i < _in_slots; i++) {
     if (!_inbox.read(i, buf)) continue;
     InRecord m;
@@ -148,40 +131,39 @@ bool Inbox::begin(bool& recreated_out) {
     memcpy(_in_idx[i].sender, m.sender_prefix, 6);
     _in_idx[i].flags = IX_USED;
   }
-  reconcile();
-  return true;
-}
 
-// Repairs what a lost file or an interrupted write left behind. An unsynced register row without its inbox
-// record goes, so a query says UNKNOWN and the sender resends (D2: duplicate over loss). An inbox record
-// whose row is already SYNCED is the tail of an interrupted sync. An inbox record without any row stays:
-// Alice never deletes an unsynced message herself.
-void Inbox::reconcile() {
+  // Each row is read once: indexed, and an unsynced one checked against its inbox record right away. A row whose
+  // record is gone (a lost file, an interrupted write) goes, so a query says UNKNOWN and the sender resends
+  // (D2: duplicate over loss).
   uint8_t linked[(RDM_INBOX_SLOTS_MAX + 7) / 8];
   memset(linked, 0, sizeof(linked));
-  uint8_t rbuf[REG_RECORD_SIZE], ibuf[RECORD_SIZE];
-
   for (uint16_t i = 0; i < _reg_slots; i++) {
-    RegIdx& x = _reg_idx[i];
-    if (!(x.flags & IX_USED) || (x.flags & IX_SYNCED)) continue;
-    uint16_t s = x.inbox_slot;
-    bool ok = s < _in_slots && (_in_idx[s].flags & IX_USED) && !(linked[s / 8] & (1 << (s % 8))) &&
-              _reg.read(i, rbuf) && _inbox.read(s, ibuf);
+    if (!_reg.read(i, buf)) continue;
+    RegRecord r;
+    unpackReg(buf, r);
+    indexReg(i, r);
+    if (r.state == REG_SYNCED) continue;
+    uint16_t s = r.inbox_slot;
+    bool ok = s < _in_slots && (_in_idx[s].flags & IX_USED) && !(linked[s / 8] & (1 << (s % 8))) && _inbox.read(s, buf);
     if (ok) {
-      RegRecord r;
       InRecord m;
-      unpackReg(rbuf, r);
-      unpackIn(ibuf, m);
+      unpackIn(buf, m);
       ok = samePrefix(r.sender_prefix, m.sender_prefix) && r.ts == m.ts;
     }
     if (ok) {
       linked[s / 8] |= (uint8_t)(1 << (s % 8));
     } else {
-      _reg.erase(i);
-      x.flags = 0;
+      dropRegSlot(i);
     }
   }
+  reconcile(linked);
+  return true;
+}
 
+// An inbox record without a row of its own whose message is already SYNCED is the tail of an interrupted sync.
+// One without any row stays: Alice never deletes an unsynced message herself.
+void Inbox::reconcile(const uint8_t* linked) {
+  uint8_t rbuf[REG_RECORD_SIZE], ibuf[RECORD_SIZE];
   for (uint16_t s = 0; s < _in_slots; s++) {
     if (!(_in_idx[s].flags & IX_USED) || (linked[s / 8] & (1 << (s % 8)))) continue;
     if (!_inbox.read(s, ibuf)) continue;
@@ -191,8 +173,7 @@ void Inbox::reconcile() {
       const RegIdx& x = _reg_idx[i];
       if (!(x.flags & IX_SYNCED) || x.ts != m.ts || !_reg.read(i, rbuf)) continue;
       if (samePrefix(rbuf, m.sender_prefix)) {
-        _inbox.erase(s);
-        _in_idx[s].flags = 0;
+        dropInboxSlot(s);
         break;
       }
     }
@@ -266,7 +247,7 @@ int Inbox::evictReg() {
       }
     }
   }
-  if (!_reg.erase(slot)) return -2;
+  if (!_reg.erase(slot)) return -2;   // the row stays indexed: the next store() tries again
   _reg_idx[slot].flags = 0;
   return slot;
 }
@@ -275,12 +256,22 @@ bool Inbox::writeReg(uint16_t slot, const RegRecord& r) {
   uint8_t buf[REG_RECORD_SIZE];
   packReg(r, buf);
   if (!_reg.write(slot, buf)) return false;
+  indexReg(slot, r);
+  return true;
+}
+
+void Inbox::indexReg(uint16_t slot, const RegRecord& r) {
   RegIdx& x = _reg_idx[slot];
   x.ts = r.ts;
   memcpy(x.key, r.key, 4);
   x.inbox_slot = r.inbox_slot;
   x.flags = regIdxFlags(r);
-  return true;
+}
+
+// The index forgets the row even when the erase fails: a stale row on flash is repaired at the next boot.
+void Inbox::dropRegSlot(uint16_t slot) {
+  _reg.erase(slot);
+  _reg_idx[slot].flags = 0;
 }
 
 // Watermarks describe rows of the lost register; kept, they would answer EVICTED for a message that may
@@ -437,10 +428,7 @@ bool Inbox::nextForApp(InRecord& out, uint16_t& slot_out) {
     // Unreadable record: drop its row too, so the slot's next owner is not confused with it and a query
     // lets the sender resend.
     int ri = findRegForInbox(slot);
-    if (ri >= 0) {
-      _reg.erase((uint16_t)ri);
-      _reg_idx[ri].flags = 0;
-    }
+    if (ri >= 0) dropRegSlot((uint16_t)ri);
     dropInboxSlot(slot);
   }
 }
@@ -473,8 +461,7 @@ void Inbox::onNextSyncRequest(uint32_t now) {
     ack_s = !(r.flags & IF_VIA_MAILBOX) && (r.flags & IF_SENDER_CAP);
     report = r.flags & RF_MBX_OUTCOME;
   } else if (ri >= 0) {
-    _reg.erase((uint16_t)ri);   // unreadable row: must not stay linked to a slot that is about to be reused
-    _reg_idx[ri].flags = 0;
+    dropRegSlot((uint16_t)ri);   // unreadable row: must not stay linked to a slot that is about to be reused
   }
   dropInboxSlot(slot);   // a failed erase is finished by reconcile() at boot
   if (ack_s) _host.sendAckS(r.sender_prefix, r.ack_s);

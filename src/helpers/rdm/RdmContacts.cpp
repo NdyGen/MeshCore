@@ -1,5 +1,7 @@
 #include "RdmContacts.h"
 
+#include "RdmBytes.h"
+
 #include <string.h>
 
 namespace rdm {
@@ -8,10 +10,7 @@ static void encode(const ContactRdm& c, uint8_t* r) {
   memcpy(r, c.pub_prefix, 6);
   r[6] = c.flags;
   r[7] = c.reserved;
-  r[8] = (uint8_t)c.watermark;
-  r[9] = (uint8_t)(c.watermark >> 8);
-  r[10] = (uint8_t)(c.watermark >> 16);
-  r[11] = (uint8_t)(c.watermark >> 24);
+  put32(&r[8], c.watermark);
   memcpy(&r[12], c.mbx_pub, 32);
   memcpy(&r[44], c.token, 8);
 }
@@ -20,7 +19,7 @@ static void decode(const uint8_t* r, ContactRdm& c) {
   memcpy(c.pub_prefix, r, 6);
   c.flags = r[6];
   c.reserved = r[7];
-  c.watermark = (uint32_t)r[8] | ((uint32_t)r[9] << 8) | ((uint32_t)r[10] << 16) | ((uint32_t)r[11] << 24);
+  c.watermark = get32(&r[8]);
   memcpy(c.mbx_pub, &r[12], 32);
   memcpy(c.token, &r[44], 8);
 }

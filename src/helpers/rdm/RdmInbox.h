@@ -102,10 +102,12 @@ private:
   int  freeInboxSlot() const;
   uint16_t unsyncedFrom(const uint8_t prefix[6]) const;
   bool writeReg(uint16_t slot, const RegRecord& r);
+  void indexReg(uint16_t slot, const RegRecord& r);
+  void dropRegSlot(uint16_t slot);
   void queueMailboxReport(uint16_t slot, const RegRecord& r, const uint8_t mbx_hash[8]);
   void addExtra(const Report& rep);
   void dropInboxSlot(uint16_t slot);
-  void reconcile();
+  void reconcile(const uint8_t* linked);
   void resetWatermarks();
 };
 

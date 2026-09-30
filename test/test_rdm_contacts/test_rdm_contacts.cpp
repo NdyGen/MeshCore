@@ -4,22 +4,22 @@
 #include <helpers/rdm/RdmContacts.h>
 
 #include <MemFileIO.h>
+#include <TestUtil.h>
 
 using namespace rdm;
 
 namespace {
 
-const char* PATH = "/rdm/contacts";
-
 struct Boot {
   RecordFile file;
   ContactTable table;
-  Boot(MemFileIO& io, uint16_t slots = 4) : file(io, PATH, 1, 52, slots, true), table(file) {}
+  Boot(MemFileIO& io, uint16_t slots = 4)
+      : file(io, ContactTable::PATH, 1, ContactTable::RECORD_SIZE, slots, true), table(file) {}
 };
 
 struct Prefix {
   uint8_t b[6];
-  explicit Prefix(uint8_t id) { for (int i = 0; i < 6; i++) b[i] = (uint8_t)(id + i * 16); }
+  explicit Prefix(uint8_t id) { fillPattern(b, sizeof(b), id, 16); }
 };
 
 }
@@ -33,7 +33,7 @@ TEST(RdmContacts, BeginFailsWithoutStorage) {
 
 TEST(RdmContacts, BeginRejectsWrongRecordSize) {
   MemFileIO io;
-  RecordFile f(io, PATH, 1, 40, 4, true);
+  RecordFile f(io, ContactTable::PATH, 1, 40, 4, true);
   ContactTable t(f);
   EXPECT_FALSE(t.begin());
 }
@@ -81,7 +81,7 @@ TEST(RdmContacts, RecordLayout) {
   for (int i = 0; i < 8; i++) c.token[i] = (uint8_t)(0xF0 + i);
   ASSERT_TRUE(b.table.save(c));
 
-  uint8_t rec[52];
+  uint8_t rec[ContactTable::RECORD_SIZE];
   ASSERT_TRUE(b.file.read(0, rec));
   EXPECT_EQ(0, memcmp(rec, Prefix(9).b, 6));
   EXPECT_EQ(rec[6], CR_CAP);

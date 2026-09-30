@@ -1,11 +1,14 @@
 #include "RdmCrypto.h"
 
+#include "RdmBytes.h"
+
 #include <SHA256.h>
 
 namespace rdm { namespace crypto {
 
 static void putTs(SHA256& sha, uint32_t ts) {
-  uint8_t b[4] = {(uint8_t)ts, (uint8_t)(ts >> 8), (uint8_t)(ts >> 16), (uint8_t)(ts >> 24)};
+  uint8_t b[4];
+  put32(b, ts);
   sha.update(b, 4);
 }
 
@@ -53,8 +56,7 @@ void ctrlAck(uint8_t out[4], const uint8_t* plain, size_t len, const uint8_t sen
 
 void txtPacketHash(uint8_t out[8], const uint8_t* payload, size_t len) {
   SHA256 sha;
-  const uint8_t type = 0x02;   // PAYLOAD_TYPE_TXT_MSG
-  sha.update(&type, 1);
+  sha.update(&PAYLOAD_TYPE_TXT, 1);
   sha.update(payload, len);
   sha.finalize(out, 8);
 }
