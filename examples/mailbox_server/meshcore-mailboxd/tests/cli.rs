@@ -188,7 +188,7 @@ fn stdio_mode_with_fake_clock() {
     ));
     let o = o4(&owner());
     let lines = [
-        "@MBX HELLO test".to_string(),
+        "@MBX HELLO 2 test".to_string(),
         format!("@MBX TIME {T0}"),
         reg_line(1, &hex(&bob()), &o, &hex(&token(&bob(), &k_owner()))),
         store_line(2, &o, &hex(&bob()), &"07".repeat(8), &[b'z'; 20]),
@@ -201,8 +201,9 @@ fn stdio_mode_with_fake_clock() {
         Some(&(lines.join("\n") + "\n")),
     ));
     let want = [
+        "mbx.hello?".to_string(),
         format!("mbx.acl {} o {o}", hex(&owner())),
-        "mbx.ready".into(),
+        "mbx.ready 2".into(),
         "mbx.time 0".into(),
         format!("mbx.time {T0}"),
         "mbx.reg 1 00 7 20".into(),
@@ -219,11 +220,12 @@ fn time_line_ignored_without_fake_clock() {
     let out = ok(daemon(
         &dir.path().join("t.db"),
         &["serve", "--stdio"],
-        Some("@MBX TIME 5\n@MBX HELLO\n"),
+        Some("@MBX TIME 5\n@MBX HELLO 2\n"),
     ));
     let lines: Vec<&str> = out.lines().collect();
-    assert_eq!((lines[0], lines.len()), ("mbx.ready", 2));
-    let t: i64 = lines[1].strip_prefix("mbx.time ").unwrap().parse().unwrap();
+    assert_eq!(lines[..2], ["mbx.hello?", "mbx.ready 2"]);
+    assert_eq!(lines.len(), 3);
+    let t: i64 = lines[2].strip_prefix("mbx.time ").unwrap().parse().unwrap();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -260,8 +262,9 @@ fn stdio_answers_each_line_before_eof() {
             .expect("no reply within 10 s")
     };
 
-    writeln!(input, "@MBX HELLO").unwrap();
-    assert_eq!(next(), "mbx.ready");
+    assert_eq!(next(), "mbx.hello?", "before any input");
+    writeln!(input, "@MBX HELLO 2").unwrap();
+    assert_eq!(next(), "mbx.ready 2");
     assert!(next().starts_with("mbx.time "));
     writeln!(
         input,
@@ -287,13 +290,15 @@ fn invalid_utf8_on_stdin_is_debug_output() {
         .spawn()
         .unwrap();
     let mut input = child.stdin.take().unwrap();
-    input.write_all(b"\xff\xfe garbage\n@MBX HELLO\n").unwrap();
+    input
+        .write_all(b"\xff\xfe garbage\n@MBX HELLO 2\n")
+        .unwrap();
     drop(input);
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     assert_eq!(
         String::from_utf8_lossy(&out.stdout),
-        "mbx.ready\nmbx.time 0\n"
+        "mbx.hello?\nmbx.ready 2\nmbx.time 0\n"
     );
 }
 
@@ -418,7 +423,7 @@ fn uses_a_database_made_by_mbxd_py() {
         ),
         reg_line(4, &c, &o4(&owner2), &hex(&token(&carol(), &k_owner()))),
         fetch_line(5, &hex(&owner()), 2, "00001111", &[]),
-        "@MBX HELLO".to_string(),
+        "@MBX HELLO 2 1.0-rdm".to_string(),
         format!("@MBX TIME {}", T0 + 120),
         stat_line(9, &c, &[&"02".repeat(8)]),
     ];
@@ -432,7 +437,8 @@ fn uses_a_database_made_by_mbxd_py() {
     } else {
         b"from bob, second".to_vec()
     };
-    let lines: Vec<&str> = out.lines().collect();
+    let mut lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.remove(0), "mbx.hello?");
     assert_eq!(
         lines[0],
         format!("mbx.stat 1 00 2:{},1:{}", "aa".repeat(6), "00".repeat(6))
@@ -459,7 +465,7 @@ fn uses_a_database_made_by_mbxd_py() {
         [
             format!("mbx.acl {c} d {o}"),
             format!("mbx.acl {b} d {o}"),
-            "mbx.ready".into(),
+            "mbx.ready 2".into(),
             format!("mbx.time {}", T0 + 60)
         ]
     );

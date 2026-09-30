@@ -1,6 +1,10 @@
 //! One radio session: a line from the radio in, its replies out. A reply exists only after its transaction
 //! committed; a storage failure turns into NO_STORAGE, a malformed line into no reply at all (the radio times
 //! out after 3 s and reports NO_STORAGE itself).
+//!
+//! Session protocol v2 (`06` par. 3.16): the daemon asks `mbx.hello?` when it starts; a HELLO with its own
+//! protocol version gets the ACL, `mbx.ready 2` and `mbx.time`, any other HELLO only `mbx.ready 2`. Requests
+//! are answered whatever the session state; the radio holds them back itself until it is ready.
 
 use log::{error, info, warn};
 
@@ -12,7 +16,7 @@ use crate::storage::{Storage, StorageError};
 use crate::system::Clock;
 use crate::types::{Code, UnixTime};
 
-/// When `mbx.time` is due: at HELLO and every 600 s after, never before the first HELLO.
+/// When `mbx.time` is due: at a HELLO with the right protocol and every 600 s after, never before one.
 #[derive(Debug, Default)]
 pub struct TimeBeacon {
     last: Option<UnixTime>,
@@ -65,6 +69,11 @@ impl<S: Storage, C: Clock> Session<S, C> {
         &mut self.mailbox
     }
 
+    /// The daemon started: ask the radio to (re)introduce itself, whatever state it is in.
+    pub fn start(&mut self) -> Vec<Reply> {
+        vec![Reply::HelloQuery]
+    }
+
     /// The replies to one line. An error means the session cannot go on (the ACL for HELLO is unreadable).
     pub fn handle_line(&mut self, line: &str) -> Result<Vec<Reply>, StorageError> {
         let request = match protocol::parse_line(line) {
@@ -81,7 +90,7 @@ impl<S: Storage, C: Clock> Session<S, C> {
         };
         let now = self.clock.now();
         let reply = match request {
-            Request::Hello { firmware, .. } => return self.hello(&firmware, now),
+            Request::Hello { proto, firmware } => return self.hello(proto, &firmware, now),
             Request::Time { unix } => {
                 if !self.clock.set(unix.into()) {
                     warn!("unknown command: {}", clip(line));
@@ -210,13 +219,31 @@ impl<S: Storage, C: Clock> Session<S, C> {
         Ok(vec![reply])
     }
 
-    /// The radio (re)booted: fill its peer cache, then `mbx.ready` and the time.
-    fn hello(&mut self, firmware: &str, now: UnixTime) -> Result<Vec<Reply>, StorageError> {
-        info!(
-            "radio hello, firmware {}",
-            if firmware.is_empty() { "?" } else { firmware }
-        );
-        let time = self.beacon.start(now);
+    /// The radio introduced itself: with our protocol it gets the ACL, `mbx.ready` and the time; with another
+    /// (or none, the v1 form) only `mbx.ready` with our version, so it can show what it is talking to.
+    fn hello(
+        &mut self,
+        proto: Option<u32>,
+        firmware: &str,
+        now: UnixTime,
+    ) -> Result<Vec<Reply>, StorageError> {
+        let firmware = if firmware.is_empty() { "?" } else { firmware };
+        if proto != Some(PROTO) {
+            let theirs =
+                proto.map_or_else(|| "1 (no version field)".to_string(), |p| p.to_string());
+            warn!(
+                "radio hello with protocol {theirs}, firmware {firmware}: this daemon speaks {PROTO}, answering mbx.ready {PROTO} only"
+            );
+            return Ok(vec![Reply::Ready { proto: PROTO }]);
+        }
+        info!("radio hello, protocol {PROTO}, firmware {firmware}");
+        let mut replies = self.acl_series()?;
+        replies.push(self.beacon.start(now));
+        Ok(replies)
+    }
+
+    /// The radio's peer cache: every ACL entry, closed by `mbx.ready` with our version.
+    fn acl_series(&mut self) -> Result<Vec<Reply>, StorageError> {
         let mut replies: Vec<Reply> = self
             .mailbox
             .acl()?
@@ -227,7 +254,7 @@ impl<S: Storage, C: Clock> Session<S, C> {
                 owner4: e.owner4,
             })
             .collect();
-        replies.extend([Reply::Ready { proto: PROTO }, time]);
+        replies.push(Reply::Ready { proto: PROTO });
         Ok(replies)
     }
 

@@ -24,12 +24,17 @@ pub enum ServeError {
     Storage(#[from] StorageError),
 }
 
-/// Runs the session until the events end, flushing the replies of every event before taking the next.
+/// Announces the daemon (`mbx.hello?`), then runs the session until the events end, flushing the replies of
+/// every event before taking the next.
 pub fn serve<S: Storage, C: Clock>(
     session: &mut Session<S, C>,
     events: impl IntoIterator<Item = io::Result<Event>>,
     out: &mut impl Write,
 ) -> Result<(), ServeError> {
+    for reply in session.start() {
+        writeln!(out, "{reply}")?;
+    }
+    out.flush()?;
     for event in events {
         let mut replies = match event? {
             Event::Line(line) => session.handle_line(&line)?,

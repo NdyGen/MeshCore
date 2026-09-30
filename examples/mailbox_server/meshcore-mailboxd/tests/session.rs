@@ -9,17 +9,21 @@ use meshcore_mailboxd::mailbox::AdminError;
 use meshcore_mailboxd::transport::{Event, serve};
 use meshcore_mailboxd::types::{KOwner, Owner4, Pubkey, State};
 
+/// One `serve` run is one daemon start: it opens with `mbx.hello?`, which is checked and left out here.
 fn run(s: &mut TestSession, events: Vec<Option<String>>) -> Vec<String> {
     let mut out = Vec::new();
     let events = events
         .into_iter()
         .map(|e| Ok(e.map_or(Event::Idle, Event::Line)));
     serve(s, events, &mut out).unwrap();
-    String::from_utf8(out)
+    let mut lines: Vec<String> = String::from_utf8(out)
         .unwrap()
         .lines()
         .map(String::from)
-        .collect()
+        .collect();
+    assert_eq!(lines.first().map(String::as_str), Some("mbx.hello?"));
+    lines.remove(0);
+    lines
 }
 
 fn line(l: impl Into<String>) -> Option<String> {
@@ -487,10 +491,10 @@ fn hello_announces_owners_first_then_recent_depositors() {
         .deny(t, &Pubkey(owner()).owner4(), &Pubkey(senders[69]))
         .unwrap();
 
-    let out = lines(&mut s, "@MBX HELLO 1.0-rdm");
+    let out = lines(&mut s, "@MBX HELLO 2 1.0-rdm");
     assert_eq!(
         out[out.len() - 2..],
-        ["mbx.ready".to_string(), format!("mbx.time {t}")]
+        ["mbx.ready 2".to_string(), format!("mbx.time {t}")]
     );
     let acl: Vec<Vec<&str>> = out[..out.len() - 2]
         .iter()
@@ -514,8 +518,94 @@ fn hello_without_owners_is_ready_and_time() {
     let fx = Fixture::new();
     let mut s = fx.session();
     assert_eq!(
-        lines(&mut s, "@MBX HELLO"),
-        ["mbx.ready".to_string(), format!("mbx.time {T0}")]
+        lines(&mut s, "@MBX HELLO 2"),
+        ["mbx.ready 2".to_string(), format!("mbx.time {T0}")]
+    );
+}
+
+// ---- session protocol v2 -------------------------------------------------------------------------------
+
+#[test]
+fn serve_asks_for_hello_at_start_and_a_hello_may_come_any_time() {
+    let fx = Fixture::new();
+    let mut s = fx.session();
+    add_owner(&mut s, T0, &owner(), &k_owner(), Limits::default());
+    let acl = format!("mbx.acl {} o {}", hex(&owner()), o4(&owner()));
+    let series = |t: i64| vec![acl.clone(), "mbx.ready 2".into(), format!("mbx.time {t}")];
+    let mut out = Vec::new();
+    serve(&mut s, std::iter::empty(), &mut out).unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), "mbx.hello?\n");
+    assert_eq!(
+        run(&mut s, vec![line("@MBX HELLO 2 1.0-rdm")]),
+        series(T0),
+        "the radio booted into a running daemon"
+    );
+    assert_eq!(
+        run(&mut s, vec![line("@MBX HELLO 2 1.0-rdm")]),
+        series(T0),
+        "a HELLO while ready (the answer to a second mbx.hello?) gets the series again"
+    );
+}
+
+#[test]
+fn hello_with_another_or_no_protocol_gets_only_ready() {
+    let fx = Fixture::new();
+    let mut s = fx.session();
+    add_owner(&mut s, T0, &owner(), &k_owner(), Limits::default());
+    for hello in [
+        "@MBX HELLO",
+        "@MBX HELLO 1.0-rdm",
+        "@MBX HELLO sim",
+        "@MBX HELLO 1 1.0-rdm",
+        "@MBX HELLO 3 1.0-rdm",
+        "@MBX HELLO 3",
+    ] {
+        assert_eq!(lines(&mut s, hello), ["mbx.ready 2"], "{hello}");
+    }
+    fx.clock.set(T0 + 3600);
+    assert!(
+        run(&mut s, vec![None]).is_empty(),
+        "a mismatch does not start the mbx.time beacon"
+    );
+    assert_eq!(
+        lines(&mut s, "@MBX HELLO 2 1.0-rdm"),
+        [
+            format!("mbx.acl {} o {}", hex(&owner()), o4(&owner())),
+            "mbx.ready 2".into(),
+            format!("mbx.time {}", T0 + 3600)
+        ],
+        "a later HELLO 2 gets the full series"
+    );
+}
+
+#[test]
+fn requests_are_answered_whatever_the_session_state() {
+    let fx = Fixture::new();
+    let mut s = fx.session();
+    add_owner(&mut s, T0, &owner(), &k_owner(), Limits::default());
+    let reg = |rid| {
+        reg_line(
+            rid,
+            &hex(&bob()),
+            &o4(&owner()),
+            &hex(&token(&bob(), &k_owner())),
+        )
+    };
+    assert_eq!(
+        lines(&mut s, &reg(1)),
+        ["mbx.reg 1 00 7 20"],
+        "before any HELLO"
+    );
+    assert_eq!(lines(&mut s, "@MBX HELLO 1.0-rdm"), ["mbx.ready 2"]);
+    assert_eq!(
+        lines(&mut s, &reg(2)),
+        ["mbx.reg 2 00 7 20"],
+        "after a mismatch"
+    );
+    let store = store_line(3, &o4(&owner()), &hex(&bob()), &"01".repeat(8), &[b'x'; 10]);
+    assert_eq!(
+        lines(&mut s, &store),
+        [format!("mbx.store 3 00 {}", T0 + 7 * DAY)]
     );
 }
 
@@ -535,8 +625,8 @@ fn time_every_600_s_after_hello_only() {
 
     let hello_t = T0 + 3600;
     assert_eq!(
-        run(&mut s, vec![line("@MBX HELLO")]),
-        ["mbx.ready".to_string(), format!("mbx.time {hello_t}")]
+        run(&mut s, vec![line("@MBX HELLO 2")]),
+        ["mbx.ready 2".to_string(), format!("mbx.time {hello_t}")]
     );
     fx.clock.set(hello_t + 599);
     assert_eq!(run(&mut s, vec![None, stat(2)]), [unknown(2)]);
@@ -559,8 +649,8 @@ fn time_line_sets_a_fake_clock_and_a_due_time_follows() {
     let fx = Fixture::new();
     let mut s = fx.session();
     assert_eq!(
-        run(&mut s, vec![line("@MBX HELLO")]),
-        ["mbx.ready".to_string(), format!("mbx.time {T0}")]
+        run(&mut s, vec![line("@MBX HELLO 2")]),
+        ["mbx.ready 2".to_string(), format!("mbx.time {T0}")]
     );
     assert!(run(&mut s, vec![line(format!("@MBX TIME {}", T0 + 599))]).is_empty());
     assert_eq!(fx.clock.now(), T0 + 599);
