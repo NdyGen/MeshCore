@@ -41,6 +41,9 @@ static File openTruncate(RDM_FILESYSTEM& fs, const char* path) {
 }
 
 #if defined(NRF52_PLATFORM) || defined(STM32_PLATFORM)
+// The traversal API changed in littlefs v2 (lfs_fs_traverse, no cfg->block_count on the handle).
+static_assert(LFS_VERSION_MAJOR == 1, "ArduinoFileIO::fsSpace walks the blocks with the littlefs v1 API");
+
 static int countBlock(void* p, lfs_block_t block) {
   (void)block;
   *(lfs_size_t*)p += 1;
@@ -112,18 +115,30 @@ bool ArduinoFileIO::remove(const char* path) {
 }
 
 uint32_t ArduinoFileIO::freeBytes() {
+  uint32_t total, used;
+  bool ok = _space ? _space(total, used) : fsSpace(total, used);
+  return ok && used < total ? total - used : 0;
+}
+
+bool ArduinoFileIO::fsSpace(uint32_t& total, uint32_t& used) {
 #if defined(ESP32)
-  size_t total = SPIFFS.totalBytes(), used = SPIFFS.usedBytes();
-  return used >= total ? 0 : (uint32_t)(total - used);
+  // fs::FS has no size query; without a SpaceFn the board's only FS (SPIFFS) is assumed, as before AR7
+  total = (uint32_t)SPIFFS.totalBytes();
+  used = (uint32_t)SPIFFS.usedBytes();
+  return true;
 #elif defined(RP2040_PLATFORM)
   FSInfo info;
-  if (!_fs.info(info) || info.usedBytes >= info.totalBytes) return 0;
-  return (uint32_t)(info.totalBytes - info.usedBytes);
+  if (!_fs.info(info)) return false;
+  total = (uint32_t)info.totalBytes;
+  used = (uint32_t)info.usedBytes;
+  return true;
 #else
   const lfs_config* cfg = _fs._getFS()->cfg;
-  lfs_size_t used = 0;
-  if (lfs_traverse(_fs._getFS(), countBlock, &used) != 0 || used >= cfg->block_count) return 0;
-  return (uint32_t)((cfg->block_count - used) * cfg->block_size);
+  lfs_size_t blocks = 0;
+  if (lfs_traverse(_fs._getFS(), countBlock, &blocks) != 0) return false;
+  total = (uint32_t)(cfg->block_count * cfg->block_size);
+  used = (uint32_t)(blocks * cfg->block_size);
+  return true;
 #endif
 }
 

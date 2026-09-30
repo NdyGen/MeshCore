@@ -116,8 +116,18 @@ StdRNG fast_rng;
 SimpleMeshTables tables;
 #ifdef WITH_RELIABLE_DM
   #include <helpers/rdm/arduino/ArduinoFileIO.h>
+  #if defined(ESP32)
+  // fs::FS cannot report its size; SPIFFS, the FS chosen above, can
+  static bool rdmSpace(uint32_t& total, uint32_t& used) {
+    total = (uint32_t)SPIFFS.totalBytes();
+    used = (uint32_t)SPIFFS.usedBytes();
+    return true;
+  }
+  #else
+  static const rdm::ArduinoFileIO::SpaceFn rdmSpace = nullptr;
+  #endif
   // RDM records sit next to the contacts and channels: on the extra FS where the board has one
-  rdm::ArduinoFileIO rdm_io(store.getSecondaryFS() ? *store.getSecondaryFS() : *store.getPrimaryFS());
+  rdm::ArduinoFileIO rdm_io(store.getSecondaryFS() ? *store.getSecondaryFS() : *store.getPrimaryFS(), rdmSpace);
   MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store, rdm_io);
 #else
 MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store);

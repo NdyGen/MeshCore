@@ -20,7 +20,11 @@ namespace rdm {
 // Records are updated in place with seek + write; openWrite() in DataStore would remove the file first on nRF52.
 class ArduinoFileIO : public FileIO {
 public:
-  explicit ArduinoFileIO(RDM_FILESYSTEM& fs) : _fs(fs) {}
+  // Capacity of the filesystem, for freeBytes(). fs::FS on ESP32 cannot report it, but the caller that chose the FS
+  // knows which object can (SPIFFS); without one RP2040 asks _fs.info() and nRF52 walks the littlefs blocks.
+  using SpaceFn = bool (*)(uint32_t& total, uint32_t& used);
+
+  explicit ArduinoFileIO(RDM_FILESYSTEM& fs, SpaceFn space = nullptr) : _fs(fs), _space(space) {}
 
   bool     exists(const char* path) override;
   int32_t  size(const char* path) override;
@@ -32,6 +36,9 @@ public:
 
 private:
   RDM_FILESYSTEM& _fs;
+  SpaceFn _space;
+
+  bool fsSpace(uint32_t& total, uint32_t& used);
 };
 
 }
