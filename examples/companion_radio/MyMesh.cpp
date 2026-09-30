@@ -2523,7 +2523,7 @@ bool MyMesh::rdmSyncNext() {
   }
   _serial->writeFrame(out_frame, encodeContactMsg(out_frame, MAX_FRAME_SIZE, rec, app_target_ver));
   if (_rdm_unread > 0) _rdm_unread--;
-  if (_listener) _listener->onQueueSizeChanged(offline_queue_len + _rdm_unread);
+  rdmQueueSizeChanged();
   return true;
 }
 
@@ -2675,10 +2675,18 @@ bool MyMesh::pushSendConfirmed(uint32_t app_ack) {
 
 void MyMesh::pushMsgWaiting() {
   _rdm_unread++;
+  rdmSignalWaiting();
+}
+
+void MyMesh::rdmSignalWaiting() {
   if (_serial->isConnected()) {
     uint8_t f[1] = {PUSH_CODE_MSG_WAITING};
     rdmQueueFrame(f, 1);
   }
+  rdmQueueSizeChanged();
+}
+
+void MyMesh::rdmQueueSizeChanged() {
   if (_listener) _listener->onQueueSizeChanged(offline_queue_len + _rdm_unread);
 }
 
@@ -2732,10 +2740,6 @@ void MyMesh::rdmPostStatusLine(const uint8_t pub_prefix[6], rdm::UserStatus s, u
   uint8_t f[MAX_FRAME_SIZE];
   size_t n = encodeChannelMsg(f, sizeof(f), app_target_ver, (uint8_t)_rdm_status_ch, getRTCClock()->getCurrentTime(), line);
   addToOfflineQueue(f, (int)n);
-  if (_serial->isConnected()) {
-    uint8_t w[1] = {PUSH_CODE_MSG_WAITING};
-    rdmQueueFrame(w, 1);
-  }
-  if (_listener) _listener->onQueueSizeChanged(offline_queue_len + _rdm_unread);
+  rdmSignalWaiting();
 }
 #endif
