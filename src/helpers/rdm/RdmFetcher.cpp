@@ -1,6 +1,7 @@
 #include "RdmFetcher.h"
 
 #include "RdmConfig.h"
+#include "RdmPolicy.h"
 
 #include <string.h>
 
@@ -15,12 +16,6 @@ constexpr uint32_t NONE = UINT32_MAX;
 Fetcher::Fetcher(Inbox& inbox, FetcherHost& host)
     : _inbox(inbox), _host(host), _store_id(0), _next_due(NONE), _trigger_at(NONE), _last_sent(0), _timeout_at(0),
       _retry_at(NONE), _sent_once(false), _in_flight(false), _last_was_retry(false), _sent_n(0) {}
-
-// G17a: repeating intervals must not stay in step with other nodes' timers
-uint32_t Fetcher::jittered(uint32_t interval) {
-  uint32_t j = interval / RDM_JITTER_DIV < RDM_JITTER_MAX_S ? interval / RDM_JITTER_DIV : RDM_JITTER_MAX_S;
-  return interval + _host.random32() % (j + 1);
-}
 
 void Fetcher::begin(uint32_t now, uint32_t store_id, uint32_t random32) {
   _store_id = store_id;
@@ -55,9 +50,9 @@ bool Fetcher::send(uint32_t now, bool is_retry) {
   _trigger_at = NONE;
   _retry_at = NONE;
   _last_was_retry = is_retry;
-  if (!is_retry) _next_due = now + jittered(RDM_FETCH_INTERVAL_S);   // G17b: a repeat keeps the original's interval
-  uint32_t wait_s = (2 * est_ms + 999) / 1000;
-  _timeout_at = now + (wait_s > RDM_WAIT_ACK_MIN_S ? wait_s : RDM_WAIT_ACK_MIN_S);
+  // G17a/G17b: the interval gets its jitter, a repeat keeps the original's interval
+  if (!is_retry) _next_due = now + jittered(RDM_FETCH_INTERVAL_S, _host.random32());
+  _timeout_at = now + waitSecs(est_ms);
   return true;
 }
 
@@ -96,9 +91,7 @@ void Fetcher::onFetchTimeout(uint32_t now) {
   _trigger_at = NONE;
   // G17b: one repeat after 60-120 s (a collision is the likely cause), then only the interval, so an
   // unreachable mailbox is not polled every time-out
-  if (!_last_was_retry) {
-    _retry_at = now + RDM_RETRY_FIRST_MIN_S + _host.random32() % (RDM_RETRY_FIRST_MAX_S - RDM_RETRY_FIRST_MIN_S + 1);
-  }
+  if (!_last_was_retry) _retry_at = now + firstRetryDelay(_host.random32());
 }
 
 void Fetcher::onMailboxAdvert(uint32_t now) {

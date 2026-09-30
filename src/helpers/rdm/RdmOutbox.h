@@ -127,11 +127,14 @@ private:
   uint8_t  _n_watch;
   bool     _tx_any;
   uint32_t _last_fw_tx;
+  uint32_t _idle_until;             // loop() has nothing to do before this RDM time; 0: scan again
   uint8_t  _self[32];
 
   uint32_t firstDelay();
   uint32_t jittered(uint32_t interval);
   void     markDm(Slot& s, uint32_t now);
+  void     armSlot(Slot& s, uint32_t now);
+  void     clearReq(Slot& s);
   bool     persist(uint8_t i);
   void     release(uint8_t i);
   int      allocSlot();
@@ -166,6 +169,9 @@ private:
   uint32_t actionDue(uint8_t i, Action a) const;
   uint32_t eventDue(uint8_t i) const;
   uint32_t gapFree() const;
+  int      dueAction(uint32_t now, Action& a_out) const;   // slot of the earliest action due, -1: none
+  bool     pickRoute(const uint8_t pub_prefix[6], uint32_t now, Peer*& peer_out, bool& flood_out);
+  void     noteRoute(Peer& p, bool flood, uint32_t now);
   bool     runAction(uint8_t i, Action a, uint32_t now);   // true: something went on air
   bool     runDm(uint8_t i, uint32_t now);
   bool     runQuery(uint8_t i, uint32_t now);
