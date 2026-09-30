@@ -41,6 +41,19 @@ template <size_t N> uint8_t stepFor(const uint32_t (&s)[N], uint32_t elapsed) {
   return k;
 }
 
+// The interval of the current step, after which the step moves on; the last interval repeats (saturating at 255)
+template <size_t N> uint32_t intervalThenStep(const uint32_t (&s)[N], uint8_t& step) {
+  uint32_t interval = schedAt(s, step);
+  if (step < 255) step++;
+  return interval;
+}
+
+// The step moves on first, then its interval; the last interval repeats (saturating at 255)
+template <size_t N> uint32_t stepThenInterval(const uint32_t (&s)[N], uint8_t& step) {
+  if (step < 255) step++;
+  return schedAt(s, step);
+}
+
 bool isDue(uint32_t t, uint32_t now) { return t != NEVER && t <= now; }
 bool sinceAtLeast(uint32_t last, uint32_t now, uint32_t secs) { return last == NEVER || now - last >= secs; }
 uint32_t minT(uint32_t a, uint32_t b) { return a < b ? a : b; }
@@ -118,6 +131,22 @@ void Outbox::markDm(Slot& s, uint32_t now) {
   s.t_even = now + jittered(RDM_DM_EVEN_WITH_CAP_S);
 }
 
+// A freshly loaded or created entry: acks, the G15 even-DM timer, and no schedule yet; callers set their own
+void Outbox::armSlot(Slot& s, uint32_t now) {
+  s.used = true;
+  computeAcks(s);
+  clearReq(s);
+  s.t_dm = s.t_query = s.t_status = s.t_deposit = NEVER;
+  s.w_status = s.w_query = s.r_status = s.r_query = NEVER;
+  s.last_heard = s.last_advert = NEVER;
+  markDm(s, now);
+}
+
+void Outbox::clearReq(Slot& s) {
+  s.req = REQ_NONE;
+  s.wait_until = NEVER;
+}
+
 bool Outbox::begin(uint32_t now) {
   _host.selfPub(_self);
   if (_file.open() == RecordFile::Open::FAILED || _file.payloadSize() != RECORD_SIZE) return false;
@@ -148,13 +177,7 @@ bool Outbox::begin(uint32_t now) {
       _file.erase(i);
       continue;
     }
-    s.used = true;
-    computeAcks(s);
-    s.wait_until = s.t_dm = s.t_query = s.t_status = s.t_deposit = NEVER;
-    s.w_status = s.w_query = s.r_status = s.r_query = NEVER;
-    s.last_heard = s.last_advert = NEVER;
-    markDm(s, now);
-    s.req = REQ_NONE;
+    armSlot(s, now);
 
     OutEntry& e = s.e;
     uint32_t age = now - e.created;
@@ -176,7 +199,7 @@ bool Outbox::begin(uint32_t now) {
           s.dm_step = stepFor(SCHED_DM, age);
           if (hasCap(e.pub_prefix)) s.t_query = kick; else s.t_dm = kick;
           s.dep_step = stepFor(SCHED_REDEP, age);
-          if (canDeposit(s)) s.t_deposit = now + jittered(schedAt(SCHED_REDEP, s.dep_step++));
+          if (canDeposit(s)) s.t_deposit = now + jittered(schedAt(SCHED_REDEP, s.dep_step++));   // stepFor < 255
           break;
         case OutState::DEPOSITING:
         case OutState::REGISTER:
@@ -333,8 +356,8 @@ void Outbox::setState(uint8_t i, OutState st, uint32_t now) {
   s.st_repeat = s.q_repeat = s.final_sent = false;
   if (isFinal(st)) {
     s.e.final_at = now;
-    s.req = REQ_NONE;
-    s.wait_until = s.t_dm = s.t_query = s.t_status = s.t_deposit = NEVER;
+    clearReq(s);
+    s.t_dm = s.t_query = s.t_status = s.t_deposit = NEVER;
   }
   if (st == OutState::ON_RADIO || st == OutState::ON_RADIO_FINAL || st == OutState::DELIVERED) confirm(i);
   if (st == OutState::SYNC_EXPIRED) addWatch(s, now);
@@ -380,8 +403,7 @@ void Outbox::leaveCopy(Slot& s, uint32_t now) {
 
 void Outbox::enterRetry(uint8_t i, uint32_t now, bool start_series) {
   Slot& s = _slots[i];
-  s.req = REQ_NONE;
-  s.wait_until = NEVER;
+  clearReq(s);
   leaveCopy(s, now);
   if (start_series && !s.in_series) {
     // G16: a WAIT_ACK timeout may be a lost ACK after delivery, so the first action waits 60-120 s
@@ -400,8 +422,8 @@ void Outbox::enterRetry(uint8_t i, uint32_t now, bool start_series) {
 void Outbox::enterOnRadio(uint8_t i, uint32_t now) {
   Slot& s = _slots[i];
   s.in_series = false;
-  s.req = REQ_NONE;
-  s.wait_until = s.t_dm = s.t_deposit = NEVER;
+  clearReq(s);
+  s.t_dm = s.t_deposit = NEVER;
   s.q_step = 0;
   if (s.e.flags & OF_MBX_COPY) {   // G11
     s.t_status = now + jittered(SCHED_ON_RADIO[0]);
@@ -417,8 +439,8 @@ void Outbox::enterOnRadio(uint8_t i, uint32_t now) {
 void Outbox::enterCustody(uint8_t i, uint32_t ttl_s, uint32_t now) {
   Slot& s = _slots[i];
   s.in_series = false;
-  s.req = REQ_NONE;
-  s.wait_until = s.t_dm = s.t_deposit = NEVER;
+  clearReq(s);
+  s.t_dm = s.t_deposit = NEVER;
   s.dep_noreply = 0;
   s.dep_step = 0;
   s.status_step = 0;
@@ -433,16 +455,14 @@ void Outbox::startDeposit(uint8_t i, bool new_round, uint32_t now) {
   Slot& s = _slots[i];
   leaveCopy(s, now);
   if (new_round) s.reg_done = false;
-  s.req = REQ_NONE;
-  s.wait_until = NEVER;
+  clearReq(s);
   s.t_deposit = now;
   setState(i, OutState::DEPOSITING, now);
 }
 
 void Outbox::depositFailed(uint8_t i, uint32_t now) {
   Slot& s = _slots[i];
-  s.t_deposit = now + jittered(schedAt(SCHED_REDEP, s.dep_step));   // G13
-  if (s.dep_step < 255) s.dep_step++;
+  s.t_deposit = now + jittered(intervalThenStep(SCHED_REDEP, s.dep_step));   // G13
   enterRetry(i, now);
 }
 
@@ -472,8 +492,7 @@ void Outbox::onWaitTimeout(uint8_t i, uint32_t now) {
 void Outbox::onReqTimeout(uint8_t i, uint32_t now) {
   Slot& s = _slots[i];
   uint8_t req = s.req;
-  s.req = REQ_NONE;
-  s.wait_until = NEVER;
+  clearReq(s);
   if (req == REQ_DEP) {
     // G9: two DEPOSITs in a row without reply means M lost our key (cache miss): register first
     if (++s.dep_noreply >= 2 && !s.reg_done) {
@@ -550,13 +569,8 @@ Outbox::SendResult Outbox::onAppSend(const uint8_t pub_prefix[6], uint32_t ts, u
     _file.erase((uint8_t)i);
     return SendResult::NO_OUTBOX;   // a promise we cannot keep across a reboot is not an outbox entry
   }
-  s.used = true;
-  computeAcks(s);
+  armSlot(s, now);
   s.wait_until = now + RDM_WAIT_ACK_MIN_S;   // the app normally follows with onAppTransmitted
-  markDm(s, now);
-  s.t_dm = s.t_query = s.t_status = s.t_deposit = NEVER;
-  s.last_heard = s.last_advert = NEVER;
-  s.w_status = s.w_query = s.r_status = s.r_query = NEVER;
   return SendResult::NEW_ENTRY;
 }
 
@@ -605,17 +619,13 @@ bool Outbox::addCtrl(const uint8_t pub_prefix[6], const uint8_t* ctrl_plain, siz
   e.deadline = addT(now, RDM_T_RADIO_S);
   e.text_len = (uint8_t)body_len;
   memcpy(e.text, body, body_len);
-  computeAcks(s);
+  computeAcks(s);   // the CTRL ack doubles as app_ack and is part of the record
   memcpy(&e.app_ack, s.ack_r[0], 4);
   if (!persist((uint8_t)i)) {
     _file.erase((uint8_t)i);
     return false;
   }
-  s.used = true;
-  s.wait_until = s.t_query = s.t_status = s.t_deposit = NEVER;
-  s.last_heard = s.last_advert = NEVER;
-  s.w_status = s.w_query = s.r_status = s.r_query = NEVER;
-  markDm(s, now);
+  armSlot(s, now);
   s.t_dm = now;
   return true;
 }
@@ -724,8 +734,7 @@ void Outbox::onDepositReply(MbxCode st, const uint8_t pkt_hash[8], uint32_t ttl_
     }
     if (!waiting) return;
     s.dep_noreply = 0;
-    s.req = REQ_NONE;
-    s.wait_until = NEVER;
+    clearReq(s);
     if (st == MbxCode::NOT_AUTH && !s.reg_done) {
       s.t_deposit = now;
       setState(i, OutState::REGISTER, now);
@@ -772,7 +781,7 @@ void Outbox::onStatusReply(const uint8_t pub_prefix[6], const uint8_t (*asked)[8
           } else {
             s.e.flags &= ~OF_MBX_COPY;
             s.dep_step = 0;
-            s.t_deposit = now + jittered(schedAt(SCHED_REDEP, s.dep_step++));
+            s.t_deposit = now + jittered(schedAt(SCHED_REDEP, s.dep_step++));   // from 0, so no saturation needed
             enterRetry(i, now);
           }
           break;
@@ -803,8 +812,7 @@ void Outbox::onRegisterReply(const uint8_t pub_prefix[6], MbxCode st, uint32_t n
     Slot& s = _slots[i];
     if (!s.used || s.e.state != OutState::REGISTER || s.req != REQ_REG ||
         memcmp(s.e.pub_prefix, pub_prefix, 6) != 0) continue;
-    s.req = REQ_NONE;
-    s.wait_until = NEVER;
+    clearReq(s);
     s.dep_noreply = 0;
     if (st == MbxCode::OK) startDeposit(i, false, now); else depositFailed(i, now);
   }
@@ -1077,6 +1085,35 @@ void Outbox::loop(uint32_t now) {
   }
 }
 
+// 03 par. 1e (L7): direct while the path answers, after 2 unanswered direct attempts one flood, at most once per
+// RDM_PROBE_FLOOD_MIN_S per contact. False: nothing goes out now (contact gone, or no path and the flood used up).
+bool Outbox::pickRoute(const uint8_t pub_prefix[6], uint32_t now, Peer*& peer_out, bool& flood_out) {
+  uint8_t pub[32];
+  if (!_host.contactPub(pub_prefix, pub)) {
+    RDM_LOG("rdm outbox: contact gone, skipped\n");
+    return false;
+  }
+  Peer& p = peer(pub_prefix);
+  peer_out = &p;
+  bool direct = _host.hasDirectPath(pub_prefix);
+  bool flood_ok = !p.flooded || now - p.last_flood >= RDM_PROBE_FLOOD_MIN_S;
+  if (direct && p.direct_fails < 2) flood_out = false;
+  else if (flood_ok) flood_out = true;
+  else if (direct) flood_out = false;
+  else return false;
+  return true;
+}
+
+void Outbox::noteRoute(Peer& p, bool flood, uint32_t now) {
+  if (flood) {
+    p.flooded = true;
+    p.last_flood = now;
+    p.direct_fails = 0;
+  } else if (p.direct_fails < 255) {
+    p.direct_fails++;
+  }
+}
+
 bool Outbox::runAction(uint8_t i, Action a, uint32_t now) {
   switch (a) {
     case ACT_DM:       return runDm(i, now);
@@ -1095,39 +1132,20 @@ bool Outbox::runDm(uint8_t i, uint32_t now) {
   bool backoff = retry && !isCtrl(e) && !hasCap(e.pub_prefix);
   markDm(s, now);
   if (backoff || isCtrl(e)) {
-    s.t_dm = now + jittered(schedAt(SCHED_DM, s.dm_step));
-    if (s.dm_step < 255) s.dm_step++;
+    s.t_dm = now + jittered(intervalThenStep(SCHED_DM, s.dm_step));
   } else {
     s.t_dm = NEVER;
   }
 
-  uint8_t pub[32];
-  if (!_host.contactPub(e.pub_prefix, pub)) {
-    RDM_LOG("rdm outbox: contact gone, DM skipped\n");
-    return false;
-  }
-  // 03 par. 1e (L7): after 2 unanswered direct attempts one flood, at most once per 4 h per contact
-  Peer& p = peer(e.pub_prefix);
-  bool direct = _host.hasDirectPath(e.pub_prefix);
-  bool flood_ok = !p.flooded || now - p.last_flood >= RDM_PROBE_FLOOD_MIN_S;
+  Peer* p;
   bool flood;
-  if (direct && p.direct_fails < 2) flood = false;
-  else if (flood_ok) flood = true;
-  else if (direct) flood = false;
-  else return false;
-
+  if (!pickRoute(e.pub_prefix, now, p, flood)) return false;
   uint8_t attempt = isCtrl(e) ? 0 : nextFwAttempt(s);
   uint32_t est = 0;
   bool sent = _host.sendDm(e, attempt, flood, est);
   persist(i);   // fw_attempt moved on, also when not sent, so no attempt value is ever reused soon
   if (!sent) return false;
-  if (flood) {
-    p.flooded = true;
-    p.last_flood = now;
-    p.direct_fails = 0;
-  } else if (p.direct_fails < 255) {
-    p.direct_fails++;
-  }
+  noteRoute(*p, flood, now);
   if (retry) {
     s.wait_until = now + waitSecs(est);
     setState(i, OutState::WAIT_ACK, now);
@@ -1161,32 +1179,17 @@ bool Outbox::runQuery(uint8_t i, uint32_t now) {
       } else if (s.e.flags & OF_MBX_COPY) {
         s.t_query = NEVER;   // G11: only on hearing Alice
       } else {
-        if (s.q_step < 255) s.q_step++;
-        s.t_query = now + jittered(schedAt(SCHED_ON_RADIO, s.q_step));
+        s.t_query = now + jittered(stepThenInterval(SCHED_ON_RADIO, s.q_step));
       }
     }
   }
 
-  uint8_t pub[32];
-  if (!_host.contactPub(prefix, pub)) return false;
-  Peer& p = peer(prefix);
-  bool direct = _host.hasDirectPath(prefix);
-  bool flood_ok = !p.flooded || now - p.last_flood >= RDM_PROBE_FLOOD_MIN_S;
+  Peer* p;
   bool flood;
-  if (direct && p.direct_fails < 2) flood = false;
-  else if (flood_ok) flood = true;
-  else if (direct) flood = false;
-  else return false;
-
+  if (!pickRoute(prefix, now, p, flood)) return false;
   uint32_t est = 0;
   if (!_host.sendReceiptQuery(prefix, items, n, flood, est)) return false;
-  if (flood) {
-    p.flooded = true;
-    p.last_flood = now;
-    p.direct_fails = 0;
-  } else if (p.direct_fails < 255) {
-    p.direct_fails++;
-  }
+  noteRoute(*p, flood, now);
   // G17b applies to queries in ON_RADIO only; in RETRY and CUSTODY silence is the normal case (Alice offline)
   for (uint8_t k = 0; k < n; k++) {
     Slot& s = _slots[idx[k]];
@@ -1213,11 +1216,9 @@ bool Outbox::runStatus(uint8_t i, uint32_t now) {
     s.r_status = NEVER;
     if (!scheduled) continue;
     if (custody) {
-      if (s.status_step < 255) s.status_step++;
-      s.t_status = now + jittered(schedAt(SCHED_STATUS, s.status_step));
+      s.t_status = now + jittered(stepThenInterval(SCHED_STATUS, s.status_step));
     } else {
-      if (s.q_step < 255) s.q_step++;
-      s.t_status = now + jittered(schedAt(SCHED_ON_RADIO, s.q_step));
+      s.t_status = now + jittered(stepThenInterval(SCHED_ON_RADIO, s.q_step));
     }
   }
   uint32_t est = 0;
