@@ -4,16 +4,21 @@
 #include <Stream.h>
 #include <helpers/rdm/mailbox/MailboxCore.h>
 
-// MailboxBackend over the serial line to mbxd on the Pi (06-implementatieplan-v1.md par. 3.16). Requests go out
-// as one '@MBX ...' line each; replies ('mbx.' lines) are read without blocking whenever the core polls. Other
-// input is ignored, so the same port can carry debug output.
+// MailboxBackend over the serial line to meshcore-mailboxd on the Pi (06-implementatieplan-v1.md par. 3.16).
+// Requests go out as one '@MBX ...' line each; replies ('mbx.' lines) are read without blocking whenever the core
+// polls. Other input is ignored, so the same port can carry debug output.
 class SerialPiBackend : public rdm::MailboxBackend {
 public:
+  static const uint32_t PROTO = 2;   // session protocol version in '@MBX HELLO' and 'mbx.ready'
+
   SerialPiBackend(Stream& io, mesh::MillisecondClock& ms);
 
-  // Sends '@MBX HELLO'; the Pi answers with the ACL, mbx.ready and mbx.time. Repeated every 30 s until ready,
-  // for a Pi that starts after the radio.
+  // Sends '@MBX HELLO PROTO fw'; the Pi answers with the ACL, 'mbx.ready PROTO' and mbx.time. Repeated every 30 s
+  // until some mbx.ready arrives, for a lost line; the Pi's own 'mbx.hello?' at start is answered at once.
   void begin(const char* fw_version);
+  // Version the daemon announced in its last mbx.ready: 0 none yet, 1 for a bare 'mbx.ready'. Ready only when
+  // it equals PROTO; otherwise the radio waits for the next 'mbx.hello?' (a daemon upgrade).
+  uint32_t daemonProto();
 
   bool store(uint32_t id, const uint8_t owner[4], const uint8_t sender_pub[32], const uint8_t pkt_hash[8],
              const uint8_t* payload, uint8_t len) override;
@@ -41,8 +46,9 @@ private:
   uint16_t _line_len = 0;
   bool     _discarding = false;       // current input line is too long; skip to its newline
   bool     _ready = false;
-  bool     _hello_sent = false;
+  bool     _hello_pending = false;   // HELLO sent, no mbx.ready of any version since
   uint32_t _hello_ms = 0;
+  uint32_t _daemon_proto = 0;
   bool     _has_time = false;
   uint32_t _time = 0, _time_ms = 0;
   rdm::BackendReply _replies[REPLIES];

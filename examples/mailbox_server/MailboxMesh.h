@@ -22,7 +22,7 @@ static_assert(MBX_PEER_CACHE_SIZE == RDM_MBX_CLIENTS, "MailboxCore rate-limits e
 // code, like the companion's default scope, for repeaters that refuse unscoped floods. Unset: unscoped.
 
 // Mailbox role (03 par. 7): answers registrations (ANON_REQ) and DEPOSIT/FETCH/STATUS requests through
-// rdm::MailboxCore, which talks to mbxd via a MailboxBackend. No chat, no forwarding, no contact list: peers live
+// rdm::MailboxCore, which talks to meshcore-mailboxd via a MailboxBackend. No chat, no forwarding, no contact list: peers live
 // in an LRU cache that the backend's ACL fills after boot and registrations extend.
 class MailboxMesh : public mesh::Mesh, private rdm::MailboxCoreHost {
 public:
