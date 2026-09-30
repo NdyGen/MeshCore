@@ -1,10 +1,11 @@
-//! The `meshcore-mailboxd` binary as the simulator and the Pi admin use it: command line, `serve --stdio [--fake-clock]`, a
-//! database made by `mbxd.py`, and the same line sequence through both daemons.
+//! The `meshcore-mailboxd` binary as the simulator and the Pi admin use it: command line, `serve --stdio
+//! [--fake-clock]`, and the golden fixtures recorded with the original Python daemon (`tests/fixtures/README.md`):
+//! a database it wrote, and line transcripts with its replies and the database contents they left behind.
 
 mod common;
 
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -13,12 +14,6 @@ use common::*;
 
 fn daemon(db: &Path, args: &[&str], stdin: Option<&str>) -> Output {
     run(Command::new(daemon_bin()), db, args, stdin)
-}
-
-fn mbxd_py_run(db: &Path, args: &[&str], stdin: Option<&str>) -> Output {
-    let mut cmd = Command::new("python3");
-    cmd.arg(mbxd_py());
-    run(cmd, db, args, stdin)
 }
 
 fn run(mut cmd: Command, db: &Path, args: &[&str], stdin: Option<&str>) -> Output {
@@ -51,14 +46,6 @@ fn ok(o: Output) -> String {
         String::from_utf8_lossy(&o.stderr)
     );
     stdout(&o)
-}
-
-fn skip_without_python() -> bool {
-    if python3_available() {
-        return false;
-    }
-    eprintln!("python3 not found: skipped (needs the reference mbxd.py)");
-    true
 }
 
 #[test]
@@ -333,7 +320,15 @@ fn dump(db: &Path) -> Vec<String> {
         let rows = stmt
             .query_map([], |r| {
                 let vals: Vec<String> = (0..n)
-                    .map(|i| format!("{:?}", r.get_ref(i).unwrap()))
+                    .map(|i| match r.get_ref(i).unwrap() {
+                        rusqlite::types::ValueRef::Null => "NULL".to_string(),
+                        rusqlite::types::ValueRef::Integer(v) => v.to_string(),
+                        rusqlite::types::ValueRef::Real(v) => v.to_string(),
+                        rusqlite::types::ValueRef::Text(t) => {
+                            format!("'{}'", String::from_utf8_lossy(t))
+                        }
+                        rusqlite::types::ValueRef::Blob(b) => format!("x'{}'", hex(b)),
+                    })
                     .collect();
                 Ok(format!("{table}: {}", vals.join(" | ")))
             })
@@ -343,17 +338,24 @@ fn dump(db: &Path) -> Vec<String> {
     out
 }
 
-#[test]
-fn uses_a_database_made_by_mbxd_py() {
-    if skip_without_python() {
-        return;
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let db = dir.path().join("py.db");
-    let o = o4(&owner());
-    let (b, c) = (hex(&bob()), hex(&carol()));
-    ok(mbxd_py_run(
-        &db,
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+fn fixture_text(name: &str) -> String {
+    std::fs::read_to_string(fixture(name)).unwrap()
+}
+
+fn fixture_lines(name: &str) -> Vec<String> {
+    fixture_text(name).lines().map(String::from).collect()
+}
+
+/// The owners and denylist entry the compatibility fixture was recorded with.
+fn compat_admin(db: &Path) {
+    ok(daemon(
+        db,
         &[
             "owner-add",
             &hex(&owner()),
@@ -366,42 +368,42 @@ fn uses_a_database_made_by_mbxd_py() {
         ],
         None,
     ));
-    let owner2 = sha256(b"owner2");
-    ok(mbxd_py_run(
-        &db,
-        &["owner-add", &hex(&owner2), "--k-owner", &hex(&k_owner())],
+    ok(daemon(
+        db,
+        &[
+            "owner-add",
+            &hex(&sha256(b"owner2")),
+            "--k-owner",
+            &hex(&k_owner()),
+        ],
         None,
     ));
-    ok(mbxd_py_run(&db, &["deny", &o4(&owner2), &c], None));
-    let bob_first = bob() < carol();
-    let py_lines = [
-        format!("@MBX TIME {T0}"),
-        reg_line(1, &b, &o, &hex(&token(&bob(), &k_owner()))),
-        reg_line(2, &c, &o, &hex(&token(&carol(), &k_owner()))),
-        store_line(3, &o, &b, &"01".repeat(8), b"from bob, first"),
-        store_line(4, &o, &c, &"02".repeat(8), b"from carol"),
-        store_line(5, &o, &b, &"03".repeat(8), b"from bob, second"),
-        fetch_line(6, &hex(&owner()), 0, "0000abcd", &[]),
-        fetch_line(
-            7,
-            &hex(&owner()),
-            2,
-            "0000abcd",
-            &[(&"01".repeat(8), 0, &"aa".repeat(6))],
-        ),
-    ];
-    let py_out = ok(mbxd_py_run(
-        &db,
-        &["serve", "--stdio", "--fake-clock"],
-        Some(&(py_lines.join("\n") + "\n")),
+    ok(daemon(
+        db,
+        &["deny", &o4(&sha256(b"owner2")), &hex(&carol())],
+        None,
     ));
-    assert!(py_out.contains("mbx.fetch 6 00 2 0 "), "{py_out}");
-    let before = dump(&db);
+}
+
+#[test]
+fn uses_a_database_made_by_mbxd_py() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("py.db");
+    std::fs::copy(fixture("mbxd-py.db"), &db).unwrap();
+    assert_eq!(
+        dump(&db),
+        fixture_lines("mbxd-py.dump"),
+        "the fixture is what was recorded"
+    );
+    let o = o4(&owner());
+    let (b, c) = (hex(&bob()), hex(&carol()));
+    let owner2 = sha256(b"owner2");
+    let bob_first = bob() < carol();
 
     // the Rust daemon picks up where mbxd.py stopped: registrations, rotation, store_id, ON_RADIO with ACK_R
     assert_eq!(
         ok(daemon(&db, &["owner-list"], None)),
-        ok(mbxd_py_run(&db, &["owner-list"], None))
+        fixture_text("mbxd-py.owner-list")
     );
     let rs_lines = [
         format!("@MBX TIME {}", T0 + 60),
@@ -417,6 +419,8 @@ fn uses_a_database_made_by_mbxd_py() {
         reg_line(4, &c, &o4(&owner2), &hex(&token(&carol(), &k_owner()))),
         fetch_line(5, &hex(&owner()), 2, "00001111", &[]),
         "@MBX HELLO".to_string(),
+        format!("@MBX TIME {}", T0 + 120),
+        stat_line(9, &c, &[&"02".repeat(8)]),
     ];
     let out = ok(daemon(
         &db,
@@ -451,7 +455,7 @@ fn uses_a_database_made_by_mbxd_py() {
         format!("mbx.acl {} o {}", hex(&owner2), o4(&owner2))
     );
     assert_eq!(
-        lines[7..],
+        lines[7..11],
         [
             format!("mbx.acl {c} d {o}"),
             format!("mbx.acl {b} d {o}"),
@@ -459,149 +463,74 @@ fn uses_a_database_made_by_mbxd_py() {
             format!("mbx.time {}", T0 + 60)
         ]
     );
-    assert_ne!(dump(&db), before);
-
-    // and mbxd.py still reads what the Rust daemon wrote
-    let py_after = ok(mbxd_py_run(
-        &db,
-        &["serve", "--stdio", "--fake-clock"],
-        Some(&format!(
-            "@MBX TIME {}\n{}\n",
-            T0 + 120,
-            stat_line(9, &c, &[&"02".repeat(8)])
-        )),
-    ));
     assert_eq!(
-        py_after.trim(),
-        format!("mbx.stat 9 00 3:{}", "bb".repeat(6))
+        lines[11],
+        format!("mbx.stat 9 00 3:{}", "bb".repeat(6)),
+        "DELIVERED with ACK_S"
     );
-}
-
-/// A deterministic mix of valid, colliding and malformed lines; enough variety to reach every rule.
-fn script(seed: u64, n: usize) -> Vec<String> {
-    let mut x = seed;
-    let mut rnd = move |m: u64| {
-        x = x
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        (x >> 33) % m
-    };
-    let owners = [owner(), sha256(b"owner2"), sha256(b"not an owner")];
-    let senders: Vec<[u8; 32]> = (0..4).map(|i| sha256(format!("s{i}").as_bytes())).collect();
-    let hashes: Vec<String> = (0..12).map(|i| format!("{:016x}", i * 0x1111)).collect();
-    let mut t = T0;
-    let mut lines = vec![format!("@MBX TIME {t}"), "@MBX HELLO diff".into()];
-    for rid in 0..n {
-        let rid = u32::try_from(rid).unwrap();
-        let o = &owners[rnd(3) as usize];
-        let s = &senders[rnd(4) as usize];
-        let h = &hashes[rnd(12) as usize];
-        let line = match rnd(12) {
-            0 => {
-                t += [1, 60, 3600, 86_400, 3 * 86_400, 31 * 86_400][rnd(6) as usize];
-                format!("@MBX TIME {t}")
-            }
-            1 | 2 => {
-                let k = if rnd(5) == 0 { [9u8; 16] } else { k_owner() };
-                reg_line(rid, &hex(s), &o4(o), &hex(&token(s, &k)))
-            }
-            3..=5 => {
-                let len = [1, 40, 164, 165][rnd(4) as usize];
-                store_line(
-                    rid,
-                    &o4(o),
-                    &hex(s),
-                    h,
-                    &vec![u8::try_from(rnd(256)).unwrap(); len],
-                )
-            }
-            6..=8 => {
-                let reports: Vec<(String, u8, String)> = (0..rnd(4))
-                    .map(|_| {
-                        (
-                            hashes[rnd(12) as usize].clone(),
-                            u8::try_from(rnd(6)).unwrap(),
-                            format!("{:012x}", rnd(1 << 40)),
-                        )
-                    })
-                    .collect();
-                let reports: Vec<(&str, u8, &str)> = reports
-                    .iter()
-                    .map(|(h, r, a)| (h.as_str(), *r, a.as_str()))
-                    .collect();
-                let client = if rnd(8) == 0 { hex(s) } else { hex(o) };
-                let store_id = ["00000001", "00000001", "00000001", "0000beef"][rnd(4) as usize];
-                fetch_line(rid, &client, [0, 2][rnd(2) as usize], store_id, &reports)
-            }
-            9 | 10 => {
-                let hs: Vec<&str> = (0..=rnd(3))
-                    .map(|_| hashes[rnd(12) as usize].as_str())
-                    .collect();
-                stat_line(rid, &hex(s), &hs)
-            }
-            _ => match rnd(5) {
-                0 => "@MBX HELLO again".into(),
-                1 => format!("@MBX STORE {rid} {} {} {h} AAA", o4(o), hex(s)),
-                2 => format!("@MBX FETCH {rid} {} 00 1 -", hex(o)),
-                3 => "noise from the radio".into(),
-                _ => format!("@MBX STAT {rid} {} {h},", hex(s)),
-            },
-        };
-        lines.push(line);
-    }
-    lines
+    assert_eq!(lines.len(), 12);
 }
 
 #[test]
+fn replays_the_recorded_session_that_made_the_fixture_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("replay.db");
+    compat_admin(&db);
+    let out = ok(daemon(
+        &db,
+        &["serve", "--stdio", "--fake-clock"],
+        Some(&fixture_text("mbxd-py.in")),
+    ));
+    assert_eq!(out, fixture_text("mbxd-py.out"));
+    assert_eq!(dump(&db), fixture_lines("mbxd-py.dump"));
+}
+
+/// The transcripts were generated as a deterministic mix of valid, colliding and malformed lines (registrations
+/// with wrong tokens, deposits of 1 to 165 bytes, FETCHes with random reports and store_ids, STATs, time jumps up
+/// to 31 days, HELLO, an unknown owner), enough variety to reach every rule.
+#[test]
 fn same_replies_and_database_as_mbxd_py() {
-    if skip_without_python() {
-        return;
-    }
     let dir = tempfile::tempdir().unwrap();
     let mut codes = std::collections::BTreeSet::new();
     for seed in [1u64, 2, 3] {
-        let (py_db, rs_db) = (
-            dir.path().join(format!("py{seed}.db")),
-            dir.path().join(format!("rs{seed}.db")),
-        );
-        for db in [&py_db, &rs_db] {
-            for (pk, ttl, quota) in [(owner(), "7", "3"), (sha256(b"owner2"), "2", "20")] {
-                let args = [
-                    "owner-add",
-                    &hex(&pk),
-                    "--k-owner",
-                    &hex(&k_owner()),
-                    "--ttl-days",
-                    ttl,
-                    "--quota",
-                    quota,
-                ];
-                ok(mbxd_py_run(db, &args, None));
-            }
-            ok(mbxd_py_run(
-                db,
-                &["deny", &o4(&owner()), &hex(&sha256(b"s3"))],
-                None,
-            ));
+        let db = dir.path().join(format!("rs{seed}.db"));
+        for (pk, ttl, quota) in [(owner(), "7", "3"), (sha256(b"owner2"), "2", "20")] {
+            let args = [
+                "owner-add",
+                &hex(&pk),
+                "--k-owner",
+                &hex(&k_owner()),
+                "--ttl-days",
+                ttl,
+                "--quota",
+                quota,
+            ];
+            ok(daemon(&db, &args, None));
         }
-        let input = script(seed, 600).join("\n") + "\n";
-        let py = ok(mbxd_py_run(
-            &py_db,
-            &["serve", "--stdio", "--fake-clock"],
-            Some(&input),
+        ok(daemon(
+            &db,
+            &["deny", &o4(&owner()), &hex(&sha256(b"s3"))],
+            None,
         ));
+        let input = fixture_text(&format!("diff-{seed}.in"));
+        assert!(input.lines().count() >= 600);
         let rs = ok(daemon(
-            &rs_db,
+            &db,
             &["serve", "--stdio", "--fake-clock"],
             Some(&input),
         ));
-        let (py, rs): (Vec<&str>, Vec<&str>) = (py.lines().collect(), rs.lines().collect());
+        let py = fixture_lines(&format!("diff-{seed}.out"));
+        let rs: Vec<&str> = rs.lines().collect();
         assert!(py.len() > 300, "seed {seed}: only {} replies", py.len());
         for (i, (p, r)) in py.iter().zip(&rs).enumerate() {
-            assert_eq!(r, p, "seed {seed}, reply {i}");
+            assert_eq!(*r, p, "seed {seed}, reply {i}");
         }
         assert_eq!(rs.len(), py.len(), "seed {seed}");
-        assert_eq!(dump(&rs_db), dump(&py_db), "seed {seed}: database contents");
+        assert_eq!(
+            dump(&db),
+            fixture_lines(&format!("diff-{seed}.dump")),
+            "seed {seed}: database contents"
+        );
         let replies = py
             .iter()
             .filter(|l| !l.starts_with("mbx.time") && !l.starts_with("mbx.acl"));

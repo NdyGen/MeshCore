@@ -1,0 +1,7 @@
+mbx.reg 1 00 3 5
+mbx.reg 2 00 3 5
+mbx.store 3 00 1790259200
+mbx.store 4 00 1790259200
+mbx.store 5 00 1790259200
+mbx.fetch 6 00 2 0 ZnJvbSBjYXJvbA==
+mbx.fetch 7 00 2 1 -

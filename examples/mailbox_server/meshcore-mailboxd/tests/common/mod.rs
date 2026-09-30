@@ -175,15 +175,3 @@ pub fn lines(s: &mut TestSession, line: &str) -> Vec<String> {
 pub fn daemon_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_meshcore-mailboxd"))
 }
-
-/// `examples/mailbox_server/mbxd/mbxd.py`, the reference implementation.
-pub fn mbxd_py() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../mbxd/mbxd.py")
-}
-
-pub fn python3_available() -> bool {
-    std::process::Command::new("python3")
-        .arg("--version")
-        .output()
-        .is_ok_and(|o| o.status.success())
-}
