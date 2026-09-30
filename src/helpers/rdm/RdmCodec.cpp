@@ -287,7 +287,10 @@ bool parseFetchResp(const uint8_t* body, size_t len, uint8_t& remaining, uint8_t
   return true;
 }
 
-size_t buildStatusResp(uint8_t* out, const StatusReply* r, uint8_t n) {
+// STATUS and RECEIPT_QUERY replies share the layout n | n x (state | ack6); only the reply type and its state
+// range differ.
+template <class Reply>
+static size_t buildReplyItems(uint8_t* out, const Reply* r, uint8_t n) {
   if (n == 0 || n > MAX_BATCH) return 0;
   out[0] = n;
   uint8_t* p = &out[1];
@@ -298,47 +301,33 @@ size_t buildStatusResp(uint8_t* out, const StatusReply* r, uint8_t n) {
   return 1 + n * REPLY_ITEM_LEN;
 }
 
-// STATUS and RECEIPT_QUERY replies share the layout n | n x (state | ack6), only the state range differs.
-static bool parseReplyItems(const uint8_t* body, size_t len, uint8_t max_state, uint8_t& n) {
+template <class Reply, class State>
+static bool parseReplyItems(const uint8_t* body, size_t len, State max_state, Reply* r, uint8_t& n) {
   if (len < 1 || body[0] == 0 || body[0] > MAX_BATCH) return false;
   size_t end = 1 + body[0] * REPLY_ITEM_LEN;
   if (end > len || !zeroTail(body, end, len)) return false;
   for (uint8_t i = 0; i < body[0]; i++) {
-    if (body[1 + i * REPLY_ITEM_LEN] > max_state) return false;
+    if (body[1 + i * REPLY_ITEM_LEN] > (uint8_t)max_state) return false;
   }
   n = body[0];
+  for (uint8_t i = 0; i < n; i++) {
+    const uint8_t* p = &body[1 + i * REPLY_ITEM_LEN];
+    r[i].state = (State)p[0];
+    memcpy(r[i].ack, &p[1], 6);
+  }
   return true;
 }
+
+size_t buildStatusResp(uint8_t* out, const StatusReply* r, uint8_t n) { return buildReplyItems(out, r, n); }
 
 bool parseStatusResp(const uint8_t* body, size_t len, StatusReply* r, uint8_t& n) {
-  if (!parseReplyItems(body, len, (uint8_t)MbxState::SYNC_EXPIRED, n)) return false;
-  for (uint8_t i = 0; i < n; i++) {
-    const uint8_t* p = &body[1 + i * REPLY_ITEM_LEN];
-    r[i].state = (MbxState)p[0];
-    memcpy(r[i].ack, &p[1], 6);
-  }
-  return true;
+  return parseReplyItems(body, len, MbxState::SYNC_EXPIRED, r, n);
 }
 
-size_t buildQueryResp(uint8_t* out, const QueryReply* r, uint8_t n) {
-  if (n == 0 || n > MAX_BATCH) return 0;
-  out[0] = n;
-  uint8_t* p = &out[1];
-  for (uint8_t i = 0; i < n; i++, p += REPLY_ITEM_LEN) {
-    p[0] = (uint8_t)r[i].state;
-    memcpy(&p[1], r[i].ack, 6);
-  }
-  return 1 + n * REPLY_ITEM_LEN;
-}
+size_t buildQueryResp(uint8_t* out, const QueryReply* r, uint8_t n) { return buildReplyItems(out, r, n); }
 
 bool parseQueryResp(const uint8_t* body, size_t len, QueryReply* r, uint8_t& n) {
-  if (!parseReplyItems(body, len, (uint8_t)QueryState::EVICTED, n)) return false;
-  for (uint8_t i = 0; i < n; i++) {
-    const uint8_t* p = &body[1 + i * REPLY_ITEM_LEN];
-    r[i].state = (QueryState)p[0];
-    memcpy(r[i].ack, &p[1], 6);
-  }
-  return true;
+  return parseReplyItems(body, len, QueryState::EVICTED, r, n);
 }
 
 }}
