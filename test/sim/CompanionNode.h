@@ -155,7 +155,7 @@ private:
   std::unique_ptr<rdm::ArduinoFileIO> _rdm_io;   // stateless, on the node's flash like main.cpp: a new one per boot
 #endif
   std::unique_ptr<DataStore> _store;
-  MyMesh* _firmware = nullptr;
+  DeterministicPeerData<MyMesh>* _firmware = nullptr;
   SimSerialLink _link;
   CompanionApp _app;
 };

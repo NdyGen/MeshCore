@@ -268,7 +268,6 @@ void Simulator::transmit(SimNode& from, const uint8_t* bytes, int len) {
   traceTx(from, bytes, len);
   const TxRecord& tx = _tx_log.back();
   const uint64_t end = _now + airtime_ms(len);
-  _last_activity = end;
 
   for (auto& r : _in_flight) {  // half duplex: the transmitter loses whatever it was receiving
     if (r.to == from.index() && r.corrupted == DROP_NONE) r.corrupted = DROP_HALFDUPLEX;
@@ -347,7 +346,7 @@ void Simulator::deliverDue() {
 }
 
 bool Simulator::idle() const {
-  if (!_in_flight.empty() || _now < _last_activity + _ff_settle) return false;
+  if (!_in_flight.empty()) return false;
   for (const auto& n : _nodes) {
     if (!n->powered()) continue;
     if (n->busy() || n->radio().isTransmitting() || n->radio().hasPendingRx()) return false;

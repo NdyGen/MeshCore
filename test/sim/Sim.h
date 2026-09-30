@@ -255,8 +255,6 @@ class Simulator {
   std::vector<DropFilter> _drop_filters;
   std::vector<TxHook> _tx_hooks;
   uint32_t _ff_max_step = 0;
-  uint32_t _ff_settle = 40000;
-  uint64_t _last_activity = 0;
 
   bool idle() const;
   uint64_t nextStep() const;
@@ -288,10 +286,10 @@ public:
   void unlink(SimNode& a, SimNode& b);
   bool linked(const SimNode& from, const SimNode& to) const;
 
-  // Fast-forward: when the air is quiet for `settle_ms`, no node is busy() and no frame is pending, advance time
-  // in steps of up to `max_step_ms` (bounded by every node's nextWakeupMs()). 0 disables (default: 1 ms ticks).
-  // settle_ms covers delays the sim cannot see (flood rx delay up to 32 s, retransmit jitter).
-  void set_fast_forward(uint32_t max_step_ms, uint32_t settle_ms = 40000) { _ff_max_step = max_step_ms; _ff_settle = settle_ms; }
+  // Fast-forward: when nothing is on air, no node is busy() and no frame is pending, advance time in steps of up
+  // to `max_step_ms` (bounded by every node's nextWakeupMs()). 0 disables (default: 1 ms ticks). Delays inside a
+  // mesh (flood rx delay, retransmit jitter) hold a packet of its pool, which busy() reports.
+  void set_fast_forward(uint32_t max_step_ms) { _ff_max_step = max_step_ms; }
 
   // Targeted loss (e.g. "lose the next ACK from alice"): every filter is asked per transmission and receiver.
   void add_drop_filter(DropFilter f) { _drop_filters.push_back(std::move(f)); }
@@ -339,10 +337,18 @@ public:
 // stack of Mesh::onRecvPacket() and ends up in the ACK; on real hardware it is whatever the stack held. The
 // simulator pins it to 0 so two runs with one seed give identical bytes. The buffer is MAX_PACKET_PAYLOAD long
 // and upstream itself writes data[len].
+// The mixin also lets the simulator see the mesh's packet pool: a held packet (delayed inbound, queued outbound)
+// means work the mesh will do at a time the simulator cannot know, so fast-forward must tick through it.
 template <class M>
 class DeterministicPeerData : public M {
 public:
-  using M::M;
+  template <class... Args>
+  explicit DeterministicPeerData(Args&&... args) : M(std::forward<Args>(args)...), _pool_size(this->_mgr->getFreeCount()) {}
+
+  bool holdsPackets() const { return this->_mgr->getFreeCount() < _pool_size; }
+
+private:
+  int _pool_size;
 
 protected:
   void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data,

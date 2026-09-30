@@ -272,9 +272,10 @@ void CompanionNode::loopMesh() { _firmware->loop(); }
 
 void CompanionNode::onLoop() { _app.tick(); }
 
-// MyMesh owns its packet pool, so ask the firmware (outbound queue, lazy contacts write) and the app instead.
+// MyMesh owns its packet pool, so ask the firmware (held packets, outbound queue, lazy contacts write) and the app.
 bool CompanionNode::busy() const {
-  return (_firmware && _firmware->hasPendingWork()) || !_app.idle() || !_link.to_app.empty() || !_link.to_radio.empty();
+  return (_firmware && (_firmware->holdsPackets() || _firmware->hasPendingWork())) || !_app.idle() ||
+         !_link.to_app.empty() || !_link.to_radio.empty();
 }
 
 bool CompanionNode::rtcTrusted() {
