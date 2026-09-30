@@ -4,6 +4,8 @@
 
 #include <MemFileIO.h>
 
+#include <string.h>
+
 #include <vector>
 
 using namespace rdm;
@@ -19,6 +21,8 @@ std::vector<uint8_t> val(uint8_t seed, uint16_t size = PS) {
   for (uint16_t i = 0; i < size; i++) v[i] = (uint8_t)(seed * 31 + i);
   return v;
 }
+
+uint32_t rd32(const uint8_t* p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t)p[3] << 24); }
 
 bool readEq(const RecordFile& f, uint16_t slot, const std::vector<uint8_t>& expect) {
   std::vector<uint8_t> buf(f.payloadSize());
@@ -406,6 +410,116 @@ TEST(RdmStorage, StaleTemporaryFileIsIgnoredOnceMigrationCompleted) {
   EXPECT_EQ(f.open(migrateV1toV2), Open::OPENED);
   EXPECT_TRUE(readEq(f, 0, std::vector<uint8_t>(25, 0x33)));
   EXPECT_FALSE(io.exists(tmp.c_str())) << "leftover removed";
+}
+
+// ---- D36: which copy a write overwrites, and what it costs ----
+
+namespace {
+
+const uint32_t FILE_HDR = 16, COPY_HDR = 8;
+
+// CRC-16/CCITT over seq | used | payload, as RdmStorage.h documents it, so a copy can be forged with any seq.
+uint16_t refCrc16(uint16_t crc, const uint8_t* d, size_t n) {
+  for (size_t i = 0; i < n; i++) {
+    crc ^= (uint16_t)d[i] << 8;
+    for (int b = 0; b < 8; b++) crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021) : (uint16_t)(crc << 1);
+  }
+  return crc;
+}
+
+struct Copy { uint32_t seq; bool used; bool valid; };   // seq 0: never written; !valid: CRC mismatch (torn)
+
+void forgeCopy(MemFileIO& io, uint8_t c, const Copy& k) {
+  uint32_t off = FILE_HDR + c * (COPY_HDR + PS);
+  std::vector<uint8_t>& f = io.files[PATH];
+  memset(&f[off], 0, COPY_HDR + PS);
+  if (k.seq == 0) return;
+  std::vector<uint8_t> payload = val((uint8_t)(10 + c));
+  uint8_t h[5] = {(uint8_t)k.seq, (uint8_t)(k.seq >> 8), (uint8_t)(k.seq >> 16), (uint8_t)(k.seq >> 24), (uint8_t)(k.used ? 1 : 0)};
+  uint16_t crc = refCrc16(refCrc16(0xFFFF, h, 5), payload.data(), PS);
+  if (!k.valid) crc ^= 0x5555;
+  memcpy(&f[off], h, 4);
+  f[off + 4] = (uint8_t)crc;
+  f[off + 5] = (uint8_t)(crc >> 8);
+  f[off + 6] = h[4];
+  memcpy(&f[off + COPY_HDR], payload.data(), PS);
+}
+
+MemFileIO forge(bool ab, const Copy& a, const Copy& b) {
+  MemFileIO io;
+  RecordFile f(io, PATH, 1, PS, 1, ab);
+  EXPECT_EQ(f.open(), Open::CREATED);
+  forgeCopy(io, 0, a);
+  if (ab) forgeCopy(io, 1, b);
+  return io;
+}
+
+// The copy region a write or erase changed (-1: none, 2: both), with the seq and used byte it left there.
+struct Outcome { int target; uint32_t seq; bool used; };
+
+Outcome writeAndInspect(MemFileIO& io, bool ab, bool erase) {
+  std::vector<uint8_t> before = io.files[PATH];
+  RecordFile f(io, PATH, 1, PS, 1, ab);
+  EXPECT_EQ(f.open(), Open::OPENED);
+  EXPECT_TRUE(erase ? f.erase(0) : f.write(0, val(99).data()));
+  const std::vector<uint8_t>& after = io.files[PATH];
+  Outcome o = {-1, 0, false};
+  for (uint8_t c = 0; c < (ab ? 2 : 1); c++) {
+    uint32_t off = FILE_HDR + c * (COPY_HDR + PS);
+    if (memcmp(&before[off], &after[off], COPY_HDR + PS) == 0) continue;
+    o.target = o.target < 0 ? c : 2;
+    o.seq = rd32(&after[off]);
+    o.used = after[off + 6] != 0;
+  }
+  return o;
+}
+
+struct ChoiceCase { const char* name; bool ab; bool erase; Copy a, b; int target; uint32_t seq; bool used; };
+
+const Copy NONE = {0, false, false};
+
+// Expected values measured on the implementation before D36; the file format and this choice are the contract.
+const ChoiceCase CHOICES[] = {
+  {"ab: both never written",                 true, false, NONE, NONE, 0, 1, true},
+  {"ab: only A valid",                       true, false, {5, true, true}, NONE, 1, 6, true},
+  {"ab: only B valid",                       true, false, NONE, {5, true, true}, 0, 6, true},
+  {"ab: A newer",                            true, false, {9, true, true}, {8, true, true}, 1, 10, true},
+  {"ab: B newer",                            true, false, {8, true, true}, {9, true, true}, 0, 10, true},
+  {"ab: equal seq, A counts as newest",      true, false, {7, true, true}, {7, true, true}, 1, 8, true},
+  {"ab: newer B torn, A wins",               true, false, {5, true, true}, {6, true, false}, 1, 6, true},
+  {"ab: newer A torn, B wins",               true, false, {6, true, false}, {5, true, true}, 0, 6, true},
+  {"ab: both torn: fresh start in A",        true, false, {6, true, false}, {5, true, false}, 0, 1, true},
+  {"ab: never-written B beats torn A",       true, false, {6, true, false}, NONE, 0, 1, true},
+  {"ab: seq with a zero low byte is skipped", true, false, {0x1FF, true, true}, {0x1FE, true, true}, 1, 0x201, true},
+  {"ab: seq wrap",                           true, false, {0xFFFFFFFF, true, true}, {0xFFFFFFFE, true, true}, 1, 1, true},
+  {"ab: after the wrap the old copy stays newest", true, false, {0xFFFFFFFF, true, true}, {1, true, true}, 1, 1, true},
+  {"ab: erase of a used slot",               true, true, {5, true, true}, NONE, 1, 6, false},
+  {"ab: erase of an unused slot writes nothing", true, true, {5, false, true}, NONE, -1, 0, false},
+  {"ab: erase when the newest copy is unused", true, true, {4, true, true}, {5, false, true}, -1, 0, false},
+  {"ab: erase when the newest valid copy is unused and the newer one torn", true, true, {4, false, true}, {5, true, false}, -1, 0, false},
+  {"ab: erase of a never-written slot",      true, true, NONE, NONE, 0, 1, false},
+  {"single: never written",                  false, false, NONE, NONE, 0, 1, true},
+  {"single: valid",                          false, false, {5, true, true}, NONE, 0, 6, true},
+  {"single: torn, seq still taken from the header", false, false, {5, true, false}, NONE, 0, 6, true},
+  {"single: seq with a zero low byte is skipped", false, false, {0xFF, true, true}, NONE, 0, 0x101, true},
+  {"single: seq wrap",                       false, false, {0xFFFFFFFF, true, true}, NONE, 0, 1, true},
+  {"single: erase of a used slot",           false, true, {5, true, true}, NONE, 0, 6, false},
+  {"single: erase of an unused slot writes nothing", false, true, {5, false, true}, NONE, -1, 0, false},
+  {"single: erase of a torn slot",           false, true, {5, true, false}, NONE, 0, 6, false},
+};
+
+}
+
+TEST(RdmStorage, WriteTargetCopyForEveryCopyState) {
+  for (const ChoiceCase& c : CHOICES) {
+    MemFileIO io = forge(c.ab, c.a, c.b);
+    Outcome o = writeAndInspect(io, c.ab, c.erase);
+    EXPECT_EQ(o.target, c.target) << c.name;
+    if (c.target >= 0) {
+      EXPECT_EQ(o.seq, c.seq) << c.name;
+      EXPECT_EQ(o.used, c.used) << c.name;
+    }
+  }
 }
 
 int main(int argc, char** argv) {
