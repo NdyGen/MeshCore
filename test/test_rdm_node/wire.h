@@ -41,6 +41,8 @@ public:
   MemFileIO io;
   std::unique_ptr<Node> node;
   bool online = true;
+  bool rtc_trusted = true;   // false: the RTC was not set since boot (no app yet)
+  bool rdm_client = true;    // false: no 0x91 client connected, pushUserStatus() fails
   struct Contact { int peer; bool fav; bool path; };
   std::vector<Contact> contacts;
   std::vector<StatusPush> statuses;

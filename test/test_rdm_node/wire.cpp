@@ -15,7 +15,7 @@ Peer::Contact* Peer::contactOf(const uint8_t* prefix) {
 uint32_t Peer::millis() { return net.ms; }
 
 uint32_t Peer::rtcNow(bool& trusted) {
-  trusted = true;
+  trusted = rtc_trusted;
   return net.epoch + net.ms / 1000;
 }
 
@@ -94,6 +94,7 @@ bool Peer::decryptTxtPayload(const uint8_t* payload, size_t len, uint8_t sender_
 bool Peer::pushUserStatus(const uint8_t prefix[6], uint32_t app_ack, UserStatus s, const uint8_t key[4], uint32_t ts) {
   (void)prefix;
   (void)key;
+  if (!rdm_client) return false;
   statuses.push_back({app_ack, s, ts});
   return true;
 }

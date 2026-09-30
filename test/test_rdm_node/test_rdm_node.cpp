@@ -349,3 +349,76 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+// ---- RDM clock across a power loss and the first trusted time (D1, G6) ----
+
+namespace {
+
+// Bob's message is on Alice's radio, then Bob loses power and Alice syncs while he is off: her ACK_S is lost.
+// Bob comes back `off_ms` later without an app, so his RTC is not trusted; his boot query learns SYNCED and the
+// entry becomes DELIVERED with no 0x91 client to report to.
+uint32_t deliveredWhileUntrusted(Pair& p, uint32_t off_ms, uint32_t on_before_off_ms) {
+  Node::AppSend a = p.bob.appSend(p.alice, "hello");
+  p.net.pump();
+  EXPECT_EQ(statusesOf(p.bob, a.app_ack).back(), UserStatus::ON_RADIO);
+  p.net.run(on_before_off_ms);
+
+  p.bob.online = false;
+  p.alice.appSync();
+  p.net.pump();
+  p.net.run(off_ms, 60 * 1000);
+
+  p.bob.online = true;
+  p.bob.rtc_trusted = false;
+  p.bob.rdm_client = false;
+  p.bob.reboot();
+  p.net.run(200 * 1000);   // boot kick 60-120 s after boot (G6): RECEIPT_QUERY, answered SYNCED
+  OutEntry e[4];
+  EXPECT_EQ(p.bob.node->listOutbox(e, 4), 1);
+  EXPECT_EQ(e[0].state, OutState::DELIVERED);
+  EXPECT_FALSE(p.bob.hasStatus(UserStatus::DELIVERED)) << "no 0x91 client yet";
+  return a.app_ack;
+}
+
+// The app connects: CMD_SET_DEVICE_TIME makes the RTC trusted, a few loops run, then CMD_RDM_ENABLE replays.
+void appConnects(Pair& p) {
+  p.bob.rtc_trusted = true;
+  p.bob.node->onClientConnected(false);
+  p.net.run(5 * 1000);
+  p.bob.rdm_client = true;
+  p.bob.node->onClientConnected(true);
+}
+
+}
+
+// D29 (S04 in the simulator): power lost within RDM_CLOCK_PERSIST_S of Bob's first boot, so /rdm/meta still said
+// 0 and the RDM clock restarted from 0. The DELIVERED reached at 96 s was older than RDM_FINAL_KEEP_S the moment
+// the app set the time and the clock jumped to the wall clock: the slot was freed before the replay.
+TEST(RdmNode, FinalReachedAfterAnUnpersistedFirstBootSurvivesTheClockJump) {
+  Pair p;
+  uint32_t app_ack = deliveredWhileUntrusted(p, 2 * 3600 * 1000, 0);
+  appConnects(p);
+  EXPECT_EQ(statusesOf(p.bob, app_ack).back(), UserStatus::DELIVERED) << "0x91 replay after the clock jump";
+}
+
+// D1: without a trusted clock only on-time counts. The two days Bob was off came before the final state, so they
+// are not two days since it (G2, D3) when the clock catches up with the wall clock at the app's connect.
+TEST(RdmNode, FinalReachedWhileUntrustedIsNotAgedByTheOffTimeBeforeIt) {
+  Pair p;
+  uint32_t app_ack = deliveredWhileUntrusted(p, 2 * 86400 * 1000, RDM_CLOCK_PERSIST_S * 1000);
+  appConnects(p);
+  EXPECT_EQ(statusesOf(p.bob, app_ack).back(), UserStatus::DELIVERED) << "0x91 replay after the clock jump";
+}
+
+// G6: the RDM clock never runs back. The first trusted time since boot is persisted at once, so a power loss right
+// after it does not restart the clock at the previous persisted value.
+TEST(RdmNode, FirstTrustedTimeIsPersistedAtOnce) {
+  Pair p;   // boots with a trusted RTC, no loop() before the reboot
+  p.bob.rtc_trusted = false;
+  p.bob.reboot();
+  Node::AppSend a = p.bob.appSend(p.alice, "after reboot");
+  ASSERT_TRUE(a.handled);
+  OutEntry e[4];
+  ASSERT_EQ(p.bob.node->listOutbox(e, 4), 1);
+  EXPECT_GE(e[0].created, p.net.epoch) << "RDM time resumed from the persisted trusted time, not from 0";
+}
