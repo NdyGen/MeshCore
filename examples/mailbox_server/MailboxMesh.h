@@ -56,6 +56,7 @@ private:
   struct Peer {
     bool          used;
     bool          confirmed;             // from the ACL or a registration OK; unconfirmed ones are evicted first
+    bool          has_secret;            // ECDH is done at first use, not for every ACL line after mbx.ready
     mesh::Identity id;
     uint8_t       secret[PUB_KEY_SIZE];
     uint8_t       out_path[MAX_PATH_SIZE];
@@ -71,13 +72,16 @@ private:
   rdm::MailboxCore _core;
   const char*   _name;
   Peer          _peers[MBX_PEER_CACHE_SIZE];
-  int           _matching[MBX_PEER_CACHE_SIZE];
+  static_assert(MBX_PEER_CACHE_SIZE <= 255, "peer indexes are 8 bit");
+  uint8_t       _matching[MBX_PEER_CACHE_SIZE];
   uint32_t      _lru_seq = 0;
   unsigned long _next_advert = 0;
   TransportKey  _scope;                  // all zero: unscoped
 
   Peer* findPeer(const uint8_t pub[32]);
-  Peer* insertPeer(const uint8_t pub[32], bool confirmed);
+  // secret: the shared secret when the caller already has it (onAnonDataRecv); nullptr: derived at first use
+  Peer* insertPeer(const uint8_t pub[32], bool confirmed, const uint8_t* secret = nullptr);
+  const uint8_t* peerSecret(Peer& p);
   void  notePeerRoute(Peer& p, const mesh::Packet* packet);
   void  floodOut(mesh::Packet* pkt, uint32_t delay_millis, uint8_t path_hash_size);
 
