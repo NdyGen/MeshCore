@@ -357,14 +357,17 @@ bool RdmChatMesh::encryptTxtPayload(const uint8_t pub_prefix[6], const uint8_t* 
   return ok;
 }
 
-// Same matching as Mesh::onRecvPacket: 1-byte hashes, then the MAC decides which contact sent it.
+// Same matching as Mesh::onRecvPacket: 1-byte hashes, then the MAC decides which contact sent it. The hash match
+// runs on the copy getContactByIdx gives; the ECDH secret comes from the contact itself, so it stays cached there.
 bool RdmChatMesh::decryptTxtPayload(const uint8_t* payload, size_t len, uint8_t sender_pub_out[32], uint8_t* plain_out,
                                     size_t& plain_len) {
   if (len < 2 + CIPHER_MAC_SIZE + CIPHER_BLOCK_SIZE || !self_id.isHashMatch(payload) || plain_len < len) return false;
   ContactInfo c;
   for (int i = 0; i < getTotalContactSlots(); i++) {
     if (!getContactByIdx(i, c) || !c.id.isHashMatch(&payload[1])) continue;
-    int n = mesh::Utils::MACThenDecrypt(c.getSharedSecret(self_id), plain_out, &payload[2], (int)len - 2);
+    ContactInfo* real = lookupContactByPubKey(c.id.pub_key, PUB_KEY_SIZE);
+    const uint8_t* secret = real ? real->getSharedSecret(self_id) : c.getSharedSecret(self_id);
+    int n = mesh::Utils::MACThenDecrypt(secret, plain_out, &payload[2], (int)len - 2);
     if (n > 0) {
       memcpy(sender_pub_out, c.id.pub_key, PUB_KEY_SIZE);
       plain_len = (size_t)n;
