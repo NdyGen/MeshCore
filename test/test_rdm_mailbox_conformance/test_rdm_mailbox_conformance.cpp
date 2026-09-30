@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <MemMailboxBackend.h>
+#include <TestUtil.h>
 
 #include "MiniJson.h"
 
@@ -40,9 +41,8 @@ const Value& vectors() {
 }
 
 std::vector<uint8_t> hex(const std::string& s) {
-  if (s.size() % 2) throw std::runtime_error("odd hex length: " + s);
-  std::vector<uint8_t> out(s.size() / 2);
-  for (size_t i = 0; i < out.size(); i++) out[i] = (uint8_t)strtoul(s.substr(2 * i, 2).c_str(), nullptr, 16);
+  std::vector<uint8_t> out;
+  if (!fromHex(s, out)) throw std::runtime_error("bad hex: " + s);
   return out;
 }
 
@@ -50,13 +50,6 @@ std::vector<uint8_t> hexN(const Value& v, size_t n) {
   auto b = hex(v.asStr());
   if (b.size() != n) throw std::runtime_error("expected " + std::to_string(n) + " bytes: " + v.asStr());
   return b;
-}
-
-std::string toHex(const uint8_t* p, size_t n) {
-  static const char* digits = "0123456789abcdef";
-  std::string s;
-  for (size_t i = 0; i < n; i++) { s += digits[p[i] >> 4]; s += digits[p[i] & 15]; }
-  return s;
 }
 
 BackendReply onlyReply(MemMailboxBackend& be, BackendReply::Kind kind, uint32_t id) {
@@ -114,7 +107,7 @@ void runStep(MemMailboxBackend& be, uint32_t id, const Value& step) {
     EXPECT_EQ((int)r.code, e["code"].asInt());
     EXPECT_EQ(r.remaining, e["remaining"].asInt());
     EXPECT_EQ(r.reports_ok, e["reports_ok"].asInt());
-    std::string got = r.inner_len ? toHex(r.inner, r.inner_len) : "null";
+    std::string got = r.inner_len ? toHexLower(r.inner, r.inner_len) : "null";
     EXPECT_EQ(got, e["payload"].isNull() ? std::string("null") : e["payload"].asStr());
   } else if (op == "stat") {
     const Value& e = step["expect"];
@@ -129,7 +122,7 @@ void runStep(MemMailboxBackend& be, uint32_t id, const Value& step) {
     ASSERT_EQ(r.n, items.size());
     for (size_t i = 0; i < items.size(); i++) {
       EXPECT_EQ((int)r.items[i].state, items[i]["state"].asInt()) << "item " << i;
-      EXPECT_EQ(toHex(r.items[i].ack, 6), items[i]["ack"].asStr()) << "item " << i;
+      EXPECT_EQ(toHexLower(r.items[i].ack, 6), items[i]["ack"].asStr()) << "item " << i;
     }
   } else {
     FAIL() << "unknown op " << op;
@@ -188,7 +181,7 @@ TEST(ConformanceVectors, CoverEveryOpAndCode) {
   }
 }
 
-// ---- MemMailboxBackend specifics (not part of mbxd) ------------------------------------------------------
+// ---- MemMailboxBackend specifics (not part of the daemon) ------------------------------------------------------
 
 namespace {
 

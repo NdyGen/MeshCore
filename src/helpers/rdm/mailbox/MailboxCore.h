@@ -67,18 +67,22 @@ private:
     uint32_t last_ts, last_req_ms, hour_start_ms, lru;
     uint8_t  hour_count;
   };
-  struct Pending {
-    bool     used, path_return;
-    BackendReply::Kind kind;
-    uint32_t id, tag, deadline_ms;
+  // Where a response goes: the client, its request timestamp as tag, and a PATH return for a flood request
+  struct ReplyTo {
     uint8_t  client[32];
+    uint32_t tag;
+    bool     path_return;
+  };
+  struct Pending {
+    bool     used;
+    BackendReply::Kind kind;
+    uint32_t id, deadline_ms;
+    ReplyTo  to;
     uint8_t  owner[4];
     uint8_t  pkt_hash[8];
   };
   struct Outgoing {
-    bool     used, path_return;
-    uint32_t tag;
-    uint8_t  client[32];
+    ReplyTo  to;
     uint8_t  len;
     uint8_t  body[RESP_MAX];
   };
@@ -97,10 +101,12 @@ private:
   Client*  client(const uint8_t pub[32]);
   bool     admit(Client& c, uint32_t ts, uint32_t now);
   bool     rateLimited(const Client& c, uint32_t now) const;
-  Pending* newPending(BackendReply::Kind kind, const uint8_t client_pub[32], uint32_t tag, bool path_return, uint32_t now);
-  void     respond(const uint8_t client_pub[32], uint32_t tag, const uint8_t* body, size_t len, bool path_return);
-  void     answerStore(const Pending& p, MbxCode code, uint32_t ttl_s);
-  void     answerReg(const Pending& p, MbxCode code, uint8_t ttl_days, uint8_t quota);
+  Pending* newPending(BackendReply::Kind kind, const ReplyTo& to, uint32_t now);
+  void     respond(const ReplyTo& to, const uint8_t* body, size_t len);
+  void     answerStore(const ReplyTo& to, const uint8_t pkt_hash[8], MbxCode code, uint32_t ttl_s);
+  void     answerReg(const ReplyTo& to, MbxCode code, uint8_t ttl_days, uint8_t quota);
+  void     onDeposit(const ReplyTo& to, const uint8_t owner[4], const uint8_t* inner, uint8_t inner_len, bool limited,
+                     uint32_t now);
   void     onBackendReply(const BackendReply& r);
   void     rememberOwnerTtl(const uint8_t owner[4], uint8_t ttl_days);
   uint32_t fallbackTtl(const uint8_t owner[4]) const;

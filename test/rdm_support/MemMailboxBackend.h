@@ -2,12 +2,14 @@
 
 #include <helpers/rdm/mailbox/MailboxCore.h>
 
+#include "TestUtil.h"
+
 #include <deque>
 #include <functional>
 #include <vector>
 
-// In-memory rdm::MailboxBackend for unit tests and the simulator. Implements the same rules as mbxd
-// (examples/mailbox_server/mbxd/README.md); both run test/rdm_vectors/mailbox_conformance.json.
+// In-memory rdm::MailboxBackend for unit tests and the simulator. Implements the same rules as meshcore-mailboxd
+// (examples/mailbox_server/meshcore-mailboxd/README.md); both run test/rdm_vectors/mailbox_conformance.json.
 // Replies are queued synchronously and handed out by poll() in request order.
 class MemMailboxBackend : public rdm::MailboxBackend {
 public:
@@ -36,7 +38,7 @@ public:
   bool ready() override { return _ready; }
   uint32_t backendTime() override { return now(); }   // the Pi clock; 0 until setTime/setTimeSource
 
-  // Pi side (mbxd owner-add / deny)
+  // Pi side (the daemon CLI: owner-add / deny)
   bool addOwner(const uint8_t pub[32], const uint8_t k_owner[16], uint8_t ttl_days = 7, uint8_t sync_days = 30,
                 uint8_t quota = 20);
   bool deny(const uint8_t owner[4], const uint8_t pub[32]);
@@ -102,7 +104,7 @@ private:
   uint32_t _requests = 0;
   Mode     _mode = Mode::NORMAL;
   Lie      _lie = Lie::NONE;
-  uint32_t _lie_rng = 0x9E3779B9u;
+  Lcg32    _lie_rng{0x9E3779B9u};
   bool     _ready = true;
 
   uint32_t   now() const { return _time_fn ? _time_fn() : _now; }

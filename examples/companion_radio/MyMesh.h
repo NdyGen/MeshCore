@@ -338,6 +338,8 @@ private:
   void rdmNoteSent(uint32_t app_ack);
   void rdmSetupStatusChannel();
   void rdmPostStatusLine(const uint8_t pub_prefix[6], rdm::UserStatus s, uint32_t ts);
+  void rdmSignalWaiting();      // PUSH_CODE_MSG_WAITING to a connected app, then the UI counter
+  void rdmQueueSizeChanged();   // UI counter: upstream offline queue plus the inbox records not handed over yet
 
   rdm::companion::FrameQueue<RDM_FRAME_QUEUE_SIZE, rdm::companion::STATUS_FRAME_LEN> _rdm_frames;
   struct RdmSent {

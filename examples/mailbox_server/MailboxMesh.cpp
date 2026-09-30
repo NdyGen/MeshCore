@@ -1,7 +1,7 @@
 #include "MailboxMesh.h"
 
 #include <helpers/AdvertDataHelpers.h>
-#include <helpers/rdm/RdmConfig.h>
+#include <helpers/rdm/RdmPolicy.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -47,10 +47,9 @@ void MailboxMesh::loop() {
   if (millisHasNowPassed(_next_advert)) {
     // Clients use M's advert as a hint to FETCH or ask STATUS, and to learn a path.
     sendSelfAdvert(true);
-    // G17: I + U[0, min(I / 10, 60 s)], drawn per interval, so M's adverts do not fall in step with other timers.
+    // G17: I + U[0, jitterMax(I)], drawn per interval, so M's adverts do not fall in step with other timers.
     uint32_t interval_s = MBX_FLOOD_ADVERT_INTERVAL_S;
-    uint32_t jitter_max = interval_s / RDM_JITTER_DIV < RDM_JITTER_MAX_S ? interval_s / RDM_JITTER_DIV : RDM_JITTER_MAX_S;
-    interval_s += getRNG()->nextInt(0, jitter_max + 1);
+    interval_s += getRNG()->nextInt(0, rdm::jitterMax(interval_s) + 1);
     _next_advert = futureMillis((int)(interval_s * 1000UL));
   }
 }
@@ -93,7 +92,7 @@ MailboxMesh::Peer* MailboxMesh::findPeer(const uint8_t pub[32]) {
   return nullptr;
 }
 
-MailboxMesh::Peer* MailboxMesh::insertPeer(const uint8_t pub[32], bool confirmed) {
+MailboxMesh::Peer* MailboxMesh::insertPeer(const uint8_t pub[32], bool confirmed, const uint8_t* secret) {
   Peer* victim = nullptr;
   for (auto& p : _peers) {
     if (!p.used) { victim = &p; break; }
@@ -105,11 +104,22 @@ MailboxMesh::Peer* MailboxMesh::insertPeer(const uint8_t pub[32], bool confirmed
   victim->used = true;
   victim->confirmed = confirmed;
   victim->id = mesh::Identity(pub);
-  self_id.calcSharedSecret(victim->secret, victim->id);
+  if (secret) {
+    memcpy(victim->secret, secret, PUB_KEY_SIZE);
+    victim->has_secret = true;
+  }
   victim->out_path_len = PATH_UNKNOWN;
   victim->in_hash_size = 1;
   victim->lru = ++_lru_seq;
   return victim;
+}
+
+const uint8_t* MailboxMesh::peerSecret(Peer& p) {
+  if (!p.has_secret) {
+    self_id.calcSharedSecret(p.secret, p.id);
+    p.has_secret = true;
+  }
+  return p.secret;
 }
 
 void MailboxMesh::notePeerRoute(Peer& p, const mesh::Packet* packet) {
@@ -126,7 +136,12 @@ void MailboxMesh::onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, co
   if (packet->getPayloadType() != PAYLOAD_TYPE_ANON_REQ) return;
   // Kept unconfirmed so the registration reply can be encrypted and routed; confirmed once the Pi says OK.
   Peer* p = findPeer(sender.pub_key);
-  if (!p) p = insertPeer(sender.pub_key, false);
+  if (!p) {
+    p = insertPeer(sender.pub_key, false, secret);
+  } else if (!p->has_secret) {
+    memcpy(p->secret, secret, PUB_KEY_SIZE);
+    p->has_secret = true;
+  }
   notePeerRoute(*p, packet);
   _core.onAnonRequest(sender.pub_key, data, len, packet->isRouteFlood());
 }
@@ -134,12 +149,12 @@ void MailboxMesh::onAnonDataRecv(mesh::Packet* packet, const uint8_t* secret, co
 int MailboxMesh::searchPeersByHash(const uint8_t* hash) {
   int n = 0;
   for (int i = 0; i < MBX_PEER_CACHE_SIZE; i++)
-    if (_peers[i].used && _peers[i].id.isHashMatch(hash)) _matching[n++] = i;
+    if (_peers[i].used && _peers[i].id.isHashMatch(hash)) _matching[n++] = (uint8_t)i;
   return n;
 }
 
 void MailboxMesh::getPeerSharedSecret(uint8_t* dest_secret, int peer_idx) {
-  memcpy(dest_secret, _peers[_matching[peer_idx]].secret, PUB_KEY_SIZE);
+  memcpy(dest_secret, peerSecret(_peers[_matching[peer_idx]]), PUB_KEY_SIZE);
 }
 
 void MailboxMesh::onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret,
@@ -175,6 +190,7 @@ bool MailboxMesh::sendResponse(const uint8_t client_pub[32], uint32_t tag, const
                                bool path_return) {
   Peer* p = findPeer(client_pub);
   if (!p) p = insertPeer(client_pub, false);   // evicted between request and reply: no route left, so flood
+  const uint8_t* secret = peerSecret(*p);
 
   uint8_t data[4 + MAX_PACKET_PAYLOAD];
   if (len > MAX_PACKET_PAYLOAD) return false;
@@ -184,14 +200,14 @@ bool MailboxMesh::sendResponse(const uint8_t client_pub[32], uint32_t tag, const
   // The core asks for a PATH return only for a request that came by flood. Without that request's path (peer
   // evicted meanwhile) an empty path would tell the client M is its neighbour, so fall back to a datagram.
   if (path_return && p->in_path_valid) {
-    mesh::Packet* path = createPathReturn(p->id, p->secret, p->in_path, p->in_path_len, PAYLOAD_TYPE_RESPONSE,
+    mesh::Packet* path = createPathReturn(p->id, secret, p->in_path, p->in_path_len, PAYLOAD_TYPE_RESPONSE,
                                           data, 4 + len);
     if (path) {
       floodOut(path, MBX_RESPONSE_DELAY_MS, p->in_hash_size);
       return true;
     }
   }
-  mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, p->id, p->secret, data, 4 + len);
+  mesh::Packet* reply = createDatagram(PAYLOAD_TYPE_RESPONSE, p->id, secret, data, 4 + len);
   if (!reply) return false;
   if (p->out_path_len != PATH_UNKNOWN) {
     sendDirect(reply, p->out_path, p->out_path_len, MBX_RESPONSE_DELAY_MS);

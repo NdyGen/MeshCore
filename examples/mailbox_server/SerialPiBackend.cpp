@@ -124,14 +124,15 @@ SerialPiBackend::SerialPiBackend(Stream& io, mesh::MillisecondClock& ms) : _io(i
 void SerialPiBackend::begin(const char* fw_version) {
   _fw = fw_version;
   _ready = false;
+  _daemon_proto = 0;
   sendHello();
 }
 
 void SerialPiBackend::sendHello() {
   char line[64];
-  int n = snprintf(line, sizeof(line), "@MBX HELLO %s\n", _fw);
+  int n = snprintf(line, sizeof(line), "@MBX HELLO %lu %s\n", (unsigned long)PROTO, _fw);
   if (n > 0 && n < (int)sizeof(line)) writeLine(line, (size_t)n);
-  _hello_sent = true;
+  _hello_pending = true;
   _hello_ms = (uint32_t)_ms.getMillis();
 }
 
@@ -202,7 +203,7 @@ bool SerialPiBackend::stat(uint32_t id, const uint8_t sender_pub[32], const uint
 }
 
 void SerialPiBackend::pump() {
-  if (!_ready && _hello_sent && (uint32_t)((uint32_t)_ms.getMillis() - _hello_ms) >= HELLO_RETRY_MS) sendHello();
+  if (_hello_pending && (uint32_t)((uint32_t)_ms.getMillis() - _hello_ms) >= HELLO_RETRY_MS) sendHello();
   while (_io.available() > 0) {
     // Full queues: leave the rest in the UART buffer until the core has taken what is here.
     if (_reply_count == REPLIES || _acl_count == ACLS) return;
@@ -230,8 +231,16 @@ void SerialPiBackend::handleLine(char* line) {
   if (n && line[n - 1] == '\r') line[--n] = 0;
   if (strncmp(line, "mbx.", 4) != 0) return;
   char* rest = line + 4;
-  if (strcmp(rest, "ready") == 0) {
-    _ready = true;
+  if (strcmp(rest, "hello?") == 0) {
+    sendHello();
+    return;
+  }
+  if (strncmp(rest, "ready", 5) == 0) {
+    uint32_t proto = 1;   // v1 daemons send a bare mbx.ready
+    if (rest[5] != 0 && (rest[5] != ' ' || !parseU32(rest + 6, proto))) return;
+    _daemon_proto = proto;
+    _hello_pending = false;
+    _ready = proto == PROTO;
     return;
   }
   if (strncmp(rest, "time ", 5) == 0) {
@@ -333,6 +342,11 @@ bool SerialPiBackend::pollAcl(uint8_t pub_out[32], bool& is_owner, uint8_t owner
 bool SerialPiBackend::ready() {
   pump();
   return _ready;
+}
+
+uint32_t SerialPiBackend::daemonProto() {
+  pump();
+  return _daemon_proto;
 }
 
 uint32_t SerialPiBackend::backendTime() {

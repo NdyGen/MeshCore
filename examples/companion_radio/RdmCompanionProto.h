@@ -4,6 +4,7 @@
 // test clients use the same encoding. Header-only on purpose: the companion envs build examples/companion_radio/*.cpp,
 // so a separate .cpp would add an object to builds without WITH_RELIABLE_DM.
 
+#include <helpers/rdm/RdmBytes.h>
 #include <helpers/rdm/RdmInbox.h>
 #include <helpers/rdm/RdmOutbox.h>
 #include <helpers/rdm/RdmTypes.h>
@@ -40,12 +41,10 @@ constexpr size_t SET_MAILBOX_LEN    = 1 + 32 + 16;
 constexpr size_t SEND_CONFIRMED_LEN = 9;
 constexpr size_t MAX_APP_FRAME      = 176;   // MAX_FRAME_SIZE (BaseSerialInterface.h)
 
-inline void put32(uint8_t* p, uint32_t v) {
-  p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
-}
-inline uint32_t get32(const uint8_t* p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
+// The byte helpers are rdm::put32/get32 (RdmBytes.h); these keep rdm::companion::put32 callers compiling and do
+// not make an unqualified call ambiguous next to `using namespace rdm`.
+using rdm::put32;
+using rdm::get32;
 
 // ---- PUSH_CODE_RDM_STATUS: 0x91 | app_ack(4) | UserStatus(1) | K(4) | ts(4) | pub_prefix(6) ----
 
@@ -307,17 +306,6 @@ public:
     if (_count == 0) return;
     _head = (uint8_t)((_head + 1) % N);
     _count--;
-  }
-
-  // Status frames of this message that went out without an app_ack get the one RESP_CODE_SENT carried.
-  void fillAppAck(const uint8_t pub_prefix[6], uint32_t ts, uint32_t app_ack) {
-    for (uint8_t k = 0; k < _count; k++) {
-      uint8_t* f = _buf[(_head + k) % N];
-      if (_len[(_head + k) % N] == STATUS_FRAME_LEN && f[0] == PUSH_CODE_RDM_STATUS && get32(&f[1]) == 0 &&
-          get32(&f[10]) == ts && memcmp(&f[14], pub_prefix, 6) == 0) {
-        put32(&f[1], app_ack);
-      }
-    }
   }
 };
 

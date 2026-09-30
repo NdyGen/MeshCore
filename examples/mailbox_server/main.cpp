@@ -24,7 +24,7 @@
 #ifndef ADVERT_NAME
   #define ADVERT_NAME   "Mailbox"
 #endif
-// Radio settings come from the build (there is no CLI: the serial port belongs to mbxd).
+// Radio settings come from the build (there is no CLI: the serial port belongs to the daemon).
 #ifndef LORA_FREQ
   #define LORA_FREQ   915.0
 #endif
@@ -67,7 +67,15 @@ static void showStatus() {
            the_mesh.self_id.pub_key[2], the_mesh.self_id.pub_key[3]);
   display.print(line);
   display.setCursor(0, 24);
-  display.print(pi.ready() ? "Pi: ready" : "Pi: waiting");
+  uint32_t proto = pi.daemonProto();
+  if (pi.ready()) {
+    display.print("Pi: ready");
+  } else if (proto != 0 && proto != SerialPiBackend::PROTO) {
+    snprintf(line, sizeof(line), "Pi: proto %lu", (unsigned long)proto);   // daemon speaks another version
+    display.print(line);
+  } else {
+    display.print("Pi: waiting");
+  }
   display.setCursor(0, 36);
   snprintf(line, sizeof(line), "Peers: %u", (unsigned)the_mesh.peerCount());
   display.print(line);
@@ -77,7 +85,7 @@ static void showStatus() {
 
 void setup() {
 #ifdef ESP32
-  Serial.setRxBufferSize(2048);   // mbxd sends up to 64 ACL lines in one burst after HELLO
+  Serial.setRxBufferSize(2048);   // the daemon sends up to 64 ACL lines in one burst after HELLO
 #endif
   Serial.begin(115200);
   delay(1000);
@@ -121,7 +129,7 @@ void setup() {
     store.save("_main", the_mesh.self_id);
   }
 
-  // Not an mbx. line, so mbxd ignores it; useful when setting up the owners.
+  // Not an @MBX line, so the daemon ignores it; useful when setting up the owners.
   Serial.print("Mailbox ID: ");
   mesh::Utils::printHex(Serial, the_mesh.self_id.pub_key, PUB_KEY_SIZE);
   Serial.println();

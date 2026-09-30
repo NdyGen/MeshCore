@@ -1,8 +1,15 @@
 #include <gtest/gtest.h>
 
 #include <SerialPiBackend.h>
+#include <TestUtil.h>
 
+#include "../test_rdm_mailbox_conformance/MiniJson.h"
+
+#include <fstream>
+#include <memory>
+#include <sstream>
 #include <string>
+#include <vector>
 
 using namespace rdm;
 
@@ -50,11 +57,11 @@ protected:
 }
 
 TEST_F(SerialPiBackendTest, HelloAtBeginAndReadyOnlyAfterMbxReady) {
-  EXPECT_EQ(io.takeOut(), "@MBX HELLO 1.0-rdm\n");
+  EXPECT_EQ(io.takeOut(), "@MBX HELLO 2 1.0-rdm\n");
   EXPECT_FALSE(be.ready());
   io.feed("mbx.acl " + rep("a0", 32) + " o a0a0a0a0\n");
   EXPECT_FALSE(be.ready());
-  io.feed("mbx.ready\n");
+  io.feed("mbx.ready 2\n");
   EXPECT_TRUE(be.ready());
 }
 
@@ -65,8 +72,8 @@ TEST_F(SerialPiBackendTest, HelloRepeatsEveryThirtySecondsUntilReady) {
   EXPECT_EQ(io.takeOut(), "");
   clock.ms += 1;
   be.ready();
-  EXPECT_EQ(io.takeOut(), "@MBX HELLO 1.0-rdm\n");
-  io.feed("mbx.ready\n");
+  EXPECT_EQ(io.takeOut(), "@MBX HELLO 2 1.0-rdm\n");
+  io.feed("mbx.ready 2\n");
   be.ready();
   clock.ms += 60000;
   be.ready();
@@ -124,12 +131,12 @@ TEST_F(SerialPiBackendTest, LongestLinesFitAndInvalidBatchesAreRefused) {
 }
 
 TEST_F(SerialPiBackendTest, NeverSendsTheTestTimeLine) {
-  io.feed("mbx.ready\nmbx.time 1790000000\n");
+  io.feed("mbx.ready 2\nmbx.time 1790000000\n");
   be.ready();
   EXPECT_EQ(io.takeOut().find("TIME"), std::string::npos);
 }
 
-// Replies below are mbxd output (examples/mailbox_server/mbxd, test_mbxd.py and the conformance vectors).
+// Replies below are daemon output (meshcore-mailboxd and the conformance vectors).
 TEST_F(SerialPiBackendTest, ParsesStoreRegFetchStatReplies) {
   io.feed("mbx.store 7 00 1790604810\n"
           "mbx.reg 8 10 0 0\n"
@@ -186,7 +193,7 @@ TEST_F(SerialPiBackendTest, ParsesRegOkAndStatWithoutItems) {
 TEST_F(SerialPiBackendTest, AclLinesInOrder) {
   io.feed("mbx.acl " + rep("a0", 32) + " o a0a0a0a0\n"
           "mbx.acl " + rep("11", 32) + " d a0a0a0a0\n"
-          "mbx.ready\n");
+          "mbx.ready 2\n");
   uint8_t pub[32], o4[4];
   bool is_owner;
   ASSERT_TRUE(be.pollAcl(pub, is_owner, o4));
@@ -207,7 +214,7 @@ TEST_F(SerialPiBackendTest, SixtyFourAclLinesInOneBurstAllArrive) {
     for (int j = 0; j < 32; j++) snprintf(pub + 2 * j, 3, "%02x", (i + j) & 0xff);
     burst += std::string("mbx.acl ") + pub + " d 01020304\n";
   }
-  io.feed(burst + "mbx.ready\n");
+  io.feed(burst + "mbx.ready 2\n");
   uint8_t pub[32], o4[4];
   bool is_owner;
   int n = 0;
@@ -273,6 +280,293 @@ TEST_F(SerialPiBackendTest, BackendTimeFollowsMbxTimeWithMillis) {
   EXPECT_EQ(be.backendTime(), 1790000600u) << "a new mbx.time replaces the extrapolation";
   clock.ms += 1000;
   EXPECT_EQ(be.backendTime(), 1790000601u);
+}
+
+// ---- session protocol v2 (06 par. 3.16) ----
+
+TEST_F(SerialPiBackendTest, HelloQueryWhileReadyIsAnsweredAndKeepsReady) {
+  io.takeOut();
+  io.feed("mbx.acl " + rep("a0", 32) + " o a0a0a0a0\nmbx.ready 2\nmbx.time 1790000000\n");
+  ASSERT_TRUE(be.ready());
+  io.feed("mbx.hello?\n");
+  EXPECT_TRUE(be.ready()) << "a daemon restart does not drop readiness";
+  EXPECT_EQ(io.takeOut(), "@MBX HELLO 2 1.0-rdm\n");
+  clock.ms += 29999;
+  EXPECT_TRUE(be.ready());
+  EXPECT_EQ(io.takeOut(), "");
+  clock.ms += 1;
+  EXPECT_TRUE(be.ready());
+  EXPECT_EQ(io.takeOut(), "@MBX HELLO 2 1.0-rdm\n") << "the answer to mbx.hello? is repeated until some mbx.ready";
+  io.feed("mbx.ready 2\n");
+  EXPECT_TRUE(be.ready());
+  clock.ms += 60000;
+  EXPECT_TRUE(be.ready());
+  EXPECT_EQ(io.takeOut(), "");
+}
+
+TEST_F(SerialPiBackendTest, SecondAclSeriesIsQueuedAgainAndReadyStays) {
+  io.takeOut();
+  io.feed("mbx.acl " + rep("a0", 32) + " o a0a0a0a0\nmbx.ready 2\nmbx.time 1790000000\n");
+  uint8_t pub[32], o4[4];
+  bool is_owner;
+  ASSERT_TRUE(be.pollAcl(pub, is_owner, o4));
+  EXPECT_FALSE(be.pollAcl(pub, is_owner, o4));
+  ASSERT_TRUE(be.ready());
+
+  // owner-add in another process: the same owner again plus the new one, then mbx.ready 2, no mbx.time
+  io.feed("mbx.acl " + rep("a0", 32) + " o a0a0a0a0\nmbx.acl " + rep("b1", 32) + " o b1b1b1b1\nmbx.ready 2\n");
+  ASSERT_TRUE(be.pollAcl(pub, is_owner, o4));
+  EXPECT_EQ(pub[0], 0xa0);
+  ASSERT_TRUE(be.pollAcl(pub, is_owner, o4));
+  EXPECT_EQ(pub[0], 0xb1);
+  EXPECT_TRUE(is_owner);
+  EXPECT_FALSE(be.pollAcl(pub, is_owner, o4));
+  EXPECT_TRUE(be.ready());
+  EXPECT_EQ(be.daemonProto(), 2u);
+  EXPECT_EQ(io.takeOut(), "") << "an ACL push needs no answer";
+  clock.ms += 5;
+  EXPECT_EQ(be.backendTime(), 1790000000u);
+}
+
+TEST_F(SerialPiBackendTest, ReadyWithAnotherVersionIsAMismatch) {
+  io.takeOut();
+  EXPECT_EQ(be.daemonProto(), 0u);
+  io.feed("mbx.ready 3\n");
+  EXPECT_FALSE(be.ready());
+  EXPECT_EQ(be.daemonProto(), 3u);
+  clock.ms += 60000;
+  EXPECT_FALSE(be.ready());
+  EXPECT_EQ(io.takeOut(), "") << "no HELLO retry after a mismatch: the radio waits for mbx.hello?";
+  io.feed("mbx.hello?\n");
+  EXPECT_FALSE(be.ready());
+  EXPECT_EQ(io.takeOut(), "@MBX HELLO 2 1.0-rdm\n");
+  io.feed("mbx.ready 2\n");
+  EXPECT_TRUE(be.ready());
+  EXPECT_EQ(be.daemonProto(), 2u);
+}
+
+TEST_F(SerialPiBackendTest, BareReadyIsProtocolOneAndAnUpgradedDaemonCanTakeOver) {
+  io.takeOut();
+  io.feed("mbx.ready\n");
+  EXPECT_FALSE(be.ready());
+  EXPECT_EQ(be.daemonProto(), 1u);
+  clock.ms += 60000;
+  EXPECT_FALSE(be.ready());
+  EXPECT_EQ(io.takeOut(), "");
+  io.feed("mbx.ready 2\n");
+  EXPECT_TRUE(be.ready());
+  io.feed("mbx.hello?\nmbx.ready 3\n");
+  EXPECT_FALSE(be.ready()) << "a daemon that now speaks another version takes readiness away";
+  EXPECT_EQ(be.daemonProto(), 3u);
+  EXPECT_EQ(io.takeOut(), "@MBX HELLO 2 1.0-rdm\n");
+}
+
+TEST_F(SerialPiBackendTest, MalformedReadyAndHelloLinesAreIgnored) {
+  io.takeOut();
+  io.feed("mbx.hello?x\nmbx.hello? \nmbx.hello\nmbx.ready x\nmbx.ready 2 2\nmbx.ready  2\nmbx.ready -2\nmbx.readyx\n");
+  EXPECT_FALSE(be.ready());
+  EXPECT_EQ(be.daemonProto(), 0u);
+  EXPECT_EQ(io.takeOut(), "");
+  BackendReply r;
+  EXPECT_FALSE(be.poll(r));
+}
+
+// ---- test/rdm_vectors/mbxd_session.json, radio side ----
+
+namespace {
+
+using minijson::Value;
+
+std::string dirOf(const std::string& path) {
+  size_t p = path.find_last_of('/');
+  return p == std::string::npos ? std::string(".") : path.substr(0, p);
+}
+
+Value loadSessionVectors() {
+  const std::string candidates[] = {
+    dirOf(__FILE__) + "/../rdm_vectors/mbxd_session.json",
+    "test/rdm_vectors/mbxd_session.json",
+  };
+  for (auto& path : candidates) {
+    std::ifstream f(path);
+    if (!f) continue;
+    std::stringstream ss;
+    ss << f.rdbuf();
+    return minijson::parse(ss.str());
+  }
+  throw std::runtime_error("mbxd_session.json not found");
+}
+
+const Value& sessionVectors() {
+  static Value v = loadSessionVectors();
+  return v;
+}
+
+bool playsRadio(const Value& c) {
+  if (!c.has("players")) return true;
+  const Value& p = c["players"];
+  for (size_t i = 0; i < p.size(); i++)
+    if (p[i].asStr() == "radio") return true;
+  return false;
+}
+
+std::vector<std::string> radioCaseNames() {
+  std::vector<std::string> names;
+  const Value& cases = sessionVectors()["cases"];
+  for (size_t i = 0; i < cases.size(); i++)
+    if (playsRadio(cases[i])) names.push_back(cases[i]["name"].asStr());
+  return names;
+}
+
+const Value& sessionCase(const std::string& name) {
+  const Value& cases = sessionVectors()["cases"];
+  for (size_t i = 0; i < cases.size(); i++)
+    if (cases[i]["name"].asStr() == name) return cases[i];
+  throw std::runtime_error("no case " + name);
+}
+
+std::vector<std::string> splitLines(const std::string& s) {
+  std::vector<std::string> out;
+  size_t start = 0;
+  for (size_t i = 0; i < s.size(); i++) {
+    if (s[i] == '\n') {
+      out.push_back(s.substr(start, i - start));
+      start = i + 1;
+    }
+  }
+  if (start < s.size()) out.push_back(s.substr(start) + "<no newline>");
+  return out;
+}
+
+std::vector<std::string> strings(const Value& arr) {
+  std::vector<std::string> out;
+  for (size_t i = 0; i < arr.size(); i++) out.push_back(arr[i].asStr());
+  return out;
+}
+
+// The radio of one case: off until radio_boot, then a fresh backend on a fresh stream.
+struct RadioPlayer {
+  FakeStream io;
+  FakeMillis clock;
+  std::unique_ptr<SerialPiBackend> be;
+
+  void pump() {
+    if (be) be->ready();
+  }
+
+  void step(const Value& st) {
+    if (st.has("from")) {
+      if (st["from"].asStr() == "radio") {
+        pump();
+        EXPECT_EQ(splitLines(io.takeOut()), strings(st["lines"]));
+      } else if (be) {
+        for (const std::string& l : strings(st["lines"])) io.feed(l + "\n");
+        pump();
+      }
+      return;
+    }
+    const std::string& op = st["op"].asStr();
+    if (op == "radio_boot") {
+      io = FakeStream();
+      be.reset(new SerialPiBackend(io, clock));
+      static std::string fw;
+      fw = st["args"]["fw"].asStr();
+      be->begin(fw.c_str());
+    } else if (op == "radio_ms") {
+      ASSERT_TRUE(be);
+      clock.ms += (unsigned long)st["args"]["ms"].asInt();
+      pump();
+    } else if (op == "radio_reg") {
+      ASSERT_TRUE(be);
+      const Value& a = st["args"];
+      uint8_t sender[32], owner[4], token[8];
+      ASSERT_TRUE(fromHex(a["sender"].asStr(), sender, 32));
+      ASSERT_TRUE(fromHex(a["owner"].asStr(), owner, 4));
+      ASSERT_TRUE(fromHex(a["token"].asStr(), token, 8));
+      ASSERT_TRUE(be->reg((uint32_t)a["id"].asInt(), sender, owner, token));
+    } else if (op == "assert_radio") {
+      ASSERT_TRUE(be);
+      if (st.has("ready")) EXPECT_EQ(be->ready(), st["ready"].b);
+      if (st.has("daemon_proto")) EXPECT_EQ(be->daemonProto(), (uint32_t)st["daemon_proto"].asInt());
+      if (st.has("time")) EXPECT_EQ(be->backendTime(), (uint32_t)st["time"].asInt());
+      if (st.has("acl")) {
+        std::vector<std::string> got, want;
+        uint8_t pub[32], o4[4];
+        bool is_owner;
+        while (be->pollAcl(pub, is_owner, o4)) got.push_back(toHexLower(pub, 32) + (is_owner ? " o " : " d ") + toHexLower(o4, 4));
+        const Value& acl = st["acl"];
+        for (size_t i = 0; i < acl.size(); i++)
+          want.push_back(acl[i][0].asStr() + " " + acl[i][1].asStr() + " " + acl[i][2].asStr());
+        EXPECT_EQ(got, want);
+      }
+      if (st.has("replies")) {
+        const Value& replies = st["replies"];
+        for (size_t i = 0; i < replies.size(); i++) {
+          const Value& want = replies[i];
+          BackendReply r;
+          ASSERT_TRUE(be->poll(r)) << "reply " << i << " missing";
+          const std::string& kind = want["kind"].asStr();
+          EXPECT_EQ((int)r.kind, kind == "store" ? (int)BackendReply::Kind::STORE : kind == "reg" ? (int)BackendReply::Kind::REG
+                                 : kind == "fetch" ? (int)BackendReply::Kind::FETCH : (int)BackendReply::Kind::STAT);
+          EXPECT_EQ(r.id, (uint32_t)want["id"].asInt());
+          EXPECT_EQ((int)r.code, (int)want["code"].asInt());
+          if (want.has("ttl_days")) EXPECT_EQ(r.ttl_days, (int)want["ttl_days"].asInt());
+          if (want.has("quota")) EXPECT_EQ(r.quota, (int)want["quota"].asInt());
+        }
+        BackendReply extra;
+        EXPECT_FALSE(be->poll(extra)) << "more replies than expected";
+      }
+    }
+    // pi_start, owner_add, deny, undeny: daemon-side events, nothing happens on the radio
+  }
+};
+
+}
+
+class SessionVectors : public ::testing::TestWithParam<std::string> {};
+
+TEST_P(SessionVectors, RadioSide) {
+  const Value& c = sessionCase(GetParam());
+  RadioPlayer radio;
+  const Value& steps = c["steps"];
+  for (size_t i = 0; i < steps.size(); i++) {
+    SCOPED_TRACE("step " + std::to_string(i) + " (" + (steps[i].has("op") ? steps[i]["op"].asStr() : "lines from " + steps[i]["from"].asStr()) + ")");
+    radio.step(steps[i]);
+    if (HasFatalFailure()) return;
+  }
+  radio.pump();
+  EXPECT_EQ(radio.io.takeOut(), "") << "the radio sent lines the vector does not expect";
+}
+
+INSTANTIATE_TEST_SUITE_P(Vectors, SessionVectors, ::testing::ValuesIn(radioCaseNames()),
+                         [](const ::testing::TestParamInfo<std::string>& info) { return info.param; });
+
+TEST(SessionVectorsFile, CoverTheSessionRules) {
+  const Value& cases = sessionVectors()["cases"];
+  bool hello_query = false, ready_with_version = false, bare_ready = false, acl_push = false, v1_hello = false;
+  size_t radio_cases = 0;
+  for (size_t i = 0; i < cases.size(); i++) {
+    radio_cases += playsRadio(cases[i]);
+    const Value& steps = cases[i]["steps"];
+    for (size_t k = 0; k < steps.size(); k++) {
+      if (steps[k].has("op")) {
+        acl_push |= steps[k]["op"].asStr() == "owner_add" && k + 1 < steps.size() && steps[k + 1].has("from");
+        continue;
+      }
+      for (const std::string& l : strings(steps[k]["lines"])) {
+        hello_query |= l == "mbx.hello?";
+        ready_with_version |= l == "mbx.ready 2";
+        bare_ready |= l == "mbx.ready";
+        v1_hello |= l == "@MBX HELLO" || l.compare(0, 11, "@MBX HELLO ") == 0 && l.size() > 11 && (l[11] < '0' || l[11] > '9');
+      }
+    }
+  }
+  EXPECT_TRUE(hello_query);
+  EXPECT_TRUE(ready_with_version);
+  EXPECT_TRUE(bare_ready);
+  EXPECT_TRUE(acl_push);
+  EXPECT_TRUE(v1_hello);
+  EXPECT_GE(radio_cases, 7u);
 }
 
 int main(int argc, char** argv) {
