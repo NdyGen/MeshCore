@@ -43,56 +43,67 @@ uint32_t RecordFile::copyOffset(uint16_t slot, uint8_t copy) const {
   return HEADER_SIZE + ((uint32_t)slot * copies() + copy) * (COPY_HEADER_SIZE + _payload_size);
 }
 
-bool RecordFile::readCopyHeader(uint16_t slot, uint8_t copy, uint32_t& seq, uint16_t& crc, bool& used) const {
-  uint8_t h[COPY_HEADER_SIZE];
-  if (!_io.read(_path, copyOffset(slot, copy), h, sizeof(h))) return false;
-  seq = get32(h);
-  crc = get16(&h[4]);
-  used = h[6] != 0;
-  return seq != 0;   // seq 0 is a never-written copy
+// A copy whose header cannot be read counts as never written, like one with seq 0.
+void RecordFile::readCopyHeaders(uint16_t slot, uint32_t seq[2], uint16_t crc[2], bool used[2]) const {
+  for (uint8_t c = 0; c < 2; c++) {
+    uint8_t h[COPY_HEADER_SIZE];
+    seq[c] = 0;
+    crc[c] = 0;
+    used[c] = false;
+    if (c < copies() && _io.read(_path, copyOffset(slot, c), h, sizeof(h))) {
+      seq[c] = get32(h);
+      crc[c] = get16(&h[4]);
+      used[c] = h[6] != 0;
+    }
+  }
 }
 
-bool RecordFile::copyValid(uint16_t slot, uint8_t copy, uint32_t& seq, bool& used) const {
-  uint16_t stored;
-  if (!readCopyHeader(slot, copy, seq, stored, used)) return false;
-  uint16_t crc = crcStart(seq, used);
+// Newest first; on equal seq copy 0 counts as the newest.
+static void newestFirst(const uint32_t seq[2], uint8_t order[2]) {
+  order[0] = seq[1] > seq[0] ? 1 : 0;
+  order[1] = (uint8_t)(1 - order[0]);
+}
+
+// Continues crc over the stored payload: one read for payloads up to MAX_MIGRATE_PAYLOAD (every FileIO call is a
+// file open on the device).
+bool RecordFile::payloadCrc(uint16_t slot, uint8_t copy, uint16_t& crc) const {
+  uint8_t buf[MAX_MIGRATE_PAYLOAD];
   uint32_t off = copyOffset(slot, copy) + COPY_HEADER_SIZE;
-  uint8_t buf[CHUNK];
   for (uint32_t done = 0; done < _payload_size;) {
-    uint32_t n = _payload_size - done < CHUNK ? _payload_size - done : CHUNK;
+    uint32_t n = _payload_size - done < sizeof(buf) ? _payload_size - done : sizeof(buf);
     if (!_io.read(_path, off + done, buf, n)) return false;
     crc = crc16(crc, buf, n);
     done += n;
   }
-  return crc == stored;
+  return true;
 }
 
-bool RecordFile::newestCopy(uint16_t slot, uint8_t& copy, uint32_t& seq, bool& used) const {
-  bool found = false;
-  for (uint8_t c = 0; c < copies(); c++) {
-    uint32_t s;
-    bool u;
-    if (copyValid(slot, c, s, u) && (!found || s > seq)) {
-      found = true;
+// The valid copy with the highest seq. Only that one is verified; the other only when it fails (a torn write).
+bool RecordFile::newestCopy(uint16_t slot, const uint32_t seq[2], const uint16_t crc[2], const bool used[2],
+                            uint8_t& copy) const {
+  uint8_t order[2];
+  newestFirst(seq, order);
+  for (uint8_t i = 0; i < copies(); i++) {
+    uint8_t c = order[i];
+    if (seq[c] == 0) continue;
+    uint16_t sum = crcStart(seq[c], used[c]);
+    if (payloadCrc(slot, c, sum) && sum == crc[c]) {
       copy = c;
-      seq = s;
-      used = u;
+      return true;
     }
   }
-  return found;
+  return false;
 }
 
 bool RecordFile::read(uint16_t slot, uint8_t* payload) const {
   if (!_open || slot >= _slots) return false;
-  uint32_t seq[2] = {0, 0};
-  uint16_t crc[2] = {0, 0};
-  bool used[2] = {false, false};
-  for (uint8_t c = 0; c < copies(); c++) {
-    if (!readCopyHeader(slot, c, seq[c], crc[c], used[c])) seq[c] = 0;
-  }
+  uint32_t seq[2];
+  uint16_t crc[2];
+  bool used[2];
+  readCopyHeaders(slot, seq, crc, used);
   // Newest first; a torn newest copy falls back to the other one.
-  uint8_t order[2] = {0, 1};
-  if (seq[1] > seq[0]) { order[0] = 1; order[1] = 0; }
+  uint8_t order[2];
+  newestFirst(seq, order);
   for (uint8_t i = 0; i < copies(); i++) {
     uint8_t c = order[i];
     if (seq[c] == 0) continue;
@@ -106,43 +117,43 @@ bool RecordFile::read(uint16_t slot, uint8_t* payload) const {
 // differs in that byte (seq never has a zero low byte, and in A/B the other copy is two behind), so until the final
 // byte lands the stored seq disagrees with the CRC and the copy is invalid: a torn write keeps the previous value.
 bool RecordFile::writeCopy(uint16_t slot, const uint8_t* payload) {
+  uint32_t seq[2];
+  uint16_t crc[2];
+  bool used[2];
+  readCopyHeaders(slot, seq, crc, used);
+  uint8_t newest = 0;
+  bool have = newestCopy(slot, seq, crc, used, newest);
+  if (payload == nullptr && have && !used[newest]) return true;   // already empty
+
   uint8_t target = 0;
-  uint32_t seq;
-  uint8_t newest;
-  uint32_t newest_seq;
-  bool newest_used;
-  bool have = newestCopy(slot, newest, newest_seq, newest_used);
-  if (payload == nullptr && have && !newest_used) return true;   // already empty
+  uint32_t next;
   if (_ab) {
     if (have) target = (uint8_t)(1 - newest);
-    seq = have ? newest_seq + 1 : 1;
+    next = have ? seq[newest] + 1 : 1;
   } else {
-    uint16_t crc;
-    bool used;
-    readCopyHeader(slot, 0, seq, crc, used);
-    seq++;
+    next = seq[0] + 1;   // the header's seq, torn or not
   }
-  if ((seq & 0xFF) == 0) seq++;
+  if ((next & 0xFF) == 0) next++;
 
-  bool used = payload != nullptr;
-  uint16_t crc = crcStart(seq, used);
+  bool now_used = payload != nullptr;
+  uint16_t sum = crcStart(next, now_used);
   uint32_t off = copyOffset(slot, target);
-  if (used) {
-    crc = crc16(crc, payload, _payload_size);
+  if (now_used) {
+    sum = crc16(sum, payload, _payload_size);
     if (!_io.write(_path, off + COPY_HEADER_SIZE, payload, _payload_size)) return false;
   } else {
-    static const uint8_t zeros[CHUNK] = {0};
+    static const uint8_t ZEROS[MAX_MIGRATE_PAYLOAD] = {0};
     for (uint32_t done = 0; done < _payload_size;) {
-      uint32_t n = _payload_size - done < CHUNK ? _payload_size - done : CHUNK;
-      crc = crc16(crc, zeros, n);
-      if (!_io.write(_path, off + COPY_HEADER_SIZE + done, zeros, n)) return false;
+      uint32_t n = _payload_size - done < sizeof(ZEROS) ? _payload_size - done : sizeof(ZEROS);
+      sum = crc16(sum, ZEROS, n);
+      if (!_io.write(_path, off + COPY_HEADER_SIZE + done, ZEROS, n)) return false;
       done += n;
     }
   }
   uint8_t h[COPY_HEADER_SIZE];
-  put32(h, seq);
-  put16(&h[4], crc);
-  h[6] = used ? 1 : 0;
+  put32(h, next);
+  put16(&h[4], sum);
+  h[6] = now_used ? 1 : 0;
   h[7] = 0;
   return _io.write(_path, off + 1, &h[1], sizeof(h) - 1) && _io.write(_path, off, h, 1);
 }

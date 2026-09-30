@@ -522,6 +522,67 @@ TEST(RdmStorage, WriteTargetCopyForEveryCopyState) {
   }
 }
 
+namespace {
+
+// Every FileIO call is a file open on the device, so the count per persist is what D36 optimises.
+class CountingIO : public rdm::FileIO {
+public:
+  MemFileIO mem;
+  int reads = 0, writes = 0;
+  bool     exists(const char* path) override { return mem.exists(path); }
+  int32_t  size(const char* path) override { return mem.size(path); }
+  bool     create(const char* path, uint32_t size) override { return mem.create(path, size); }
+  bool     read(const char* path, uint32_t off, uint8_t* buf, uint32_t len) override { reads++; return mem.read(path, off, buf, len); }
+  bool     write(const char* path, uint32_t off, const uint8_t* buf, uint32_t len) override { writes++; return mem.write(path, off, buf, len); }
+  bool     remove(const char* path) override { return mem.remove(path); }
+  uint32_t freeBytes() override { return mem.freeBytes(); }
+  void reset() { reads = writes = 0; }
+};
+
+}
+
+// Outbox-sized records (201 bytes): two header reads and one payload read per persist, three writes.
+TEST(RdmStorage, FileIoCallsPerPersist) {
+  const uint16_t size = 201;
+  std::vector<uint8_t> rec = val(1, size);
+  {
+    CountingIO io;
+    RecordFile f(io, PATH, 1, size, 2, true);
+    ASSERT_EQ(f.open(), Open::CREATED);
+    io.reset();
+    ASSERT_TRUE(f.write(0, rec.data()));
+    EXPECT_EQ(io.reads, 2) << "A/B, fresh slot: both copy headers";
+    EXPECT_EQ(io.writes, 3) << "payload, rest of the copy header, low seq byte";
+    io.reset();
+    ASSERT_TRUE(f.write(0, rec.data()));
+    EXPECT_EQ(io.reads, 3) << "A/B, used slot: both headers, only the newest payload";
+    EXPECT_EQ(io.writes, 3);
+    io.reset();
+    ASSERT_TRUE(f.erase(0));
+    EXPECT_EQ(io.reads, 3);
+    EXPECT_EQ(io.writes, 3) << "erase: zeros in one write";
+    io.reset();
+    ASSERT_TRUE(f.write(1, rec.data()));
+    io.reset();
+    ASSERT_TRUE(f.read(1, rec.data()));
+    EXPECT_EQ(io.reads, 3) << "read: both headers, the newest payload";
+    EXPECT_EQ(io.writes, 0);
+  }
+  {
+    CountingIO io;
+    RecordFile f(io, PATH, 1, size, 2, false);
+    ASSERT_EQ(f.open(), Open::CREATED);
+    io.reset();
+    ASSERT_TRUE(f.write(0, rec.data()));
+    EXPECT_EQ(io.reads, 1) << "single copy, fresh slot: its header";
+    EXPECT_EQ(io.writes, 3);
+    io.reset();
+    ASSERT_TRUE(f.write(0, rec.data()));
+    EXPECT_EQ(io.reads, 2) << "single copy, used slot: header and payload";
+    EXPECT_EQ(io.writes, 3);
+  }
+}
+
 int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

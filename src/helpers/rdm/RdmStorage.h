@@ -48,9 +48,9 @@ private:
 
   uint8_t  copies() const { return _ab ? 2 : 1; }
   uint32_t copyOffset(uint16_t slot, uint8_t copy) const;
-  bool     readCopyHeader(uint16_t slot, uint8_t copy, uint32_t& seq, uint16_t& crc, bool& used) const;
-  bool     copyValid(uint16_t slot, uint8_t copy, uint32_t& seq, bool& used) const;
-  bool     newestCopy(uint16_t slot, uint8_t& copy, uint32_t& seq, bool& used) const;
+  void     readCopyHeaders(uint16_t slot, uint32_t seq[2], uint16_t crc[2], bool used[2]) const;   // seq 0: never written
+  bool     payloadCrc(uint16_t slot, uint8_t copy, uint16_t& crc) const;
+  bool     newestCopy(uint16_t slot, const uint32_t seq[2], const uint16_t crc[2], const bool used[2], uint8_t& copy) const;
   bool     writeCopy(uint16_t slot, const uint8_t* payload);   // nullptr: erase
   bool     writeHeader(const char* path) const;
   bool     readHeader(const char* path, Header& h) const;
