@@ -2627,25 +2627,16 @@ void MyMesh::rdmNoteSent(uint32_t app_ack) {
   _rdm_sent_next = (_rdm_sent_next + 1) % EXPECTED_ACK_TABLE_SIZE;
 }
 
-// Runs the RDM receive path, then gives the UI the preview and connection bookkeeping that MyMesh::onMessageRecv
-// does for upstream DMs, which RdmChatMesh stores in the inbox instead.
-void MyMesh::onPeerDataRecv(mesh::Packet* pkt, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data,
-                            size_t len) {
-  _rdm_new_msg = false;
-  RdmChatMesh::onPeerDataRecv(pkt, type, sender_idx, secret, data, len);
-  if (!_rdm_new_msg || type != PAYLOAD_TYPE_TXT_MSG) return;
-  _rdm_new_msg = false;
-
-  ContactInfo* from = rdmMatchedPeer(sender_idx);
-  rdm::codec::TxtParsed p;
-  if (!from || !rdm::codec::parseTxtPlain(data, len, p)) return;
-  markConnectionActive(*from);
+// The UI preview and connection bookkeeping that MyMesh::onMessageRecv does for upstream DMs, which RdmChatMesh
+// stores in the inbox instead.
+void MyMesh::rdmOnMessageStored(mesh::Packet* pkt, ContactInfo& from, const rdm::codec::TxtParsed& p) {
+  markConnectionActive(from);
   if (_listener) {
     char text[rdm::INBOX_TEXT_MAX + 1];
     size_t n = p.text_len < rdm::INBOX_TEXT_MAX ? p.text_len : rdm::INBOX_TEXT_MAX;
     memcpy(text, p.text, n);
     text[n] = 0;
-    _listener->onMessageRecv(pkt, *from, TXT_TYPE_PLAIN, p.ts, text);
+    _listener->onMessageRecv(pkt, from, TXT_TYPE_PLAIN, p.ts, text);
   }
 }
 
@@ -2683,7 +2674,6 @@ bool MyMesh::pushSendConfirmed(uint32_t app_ack) {
 }
 
 void MyMesh::pushMsgWaiting() {
-  _rdm_new_msg = true;
   _rdm_unread++;
   if (_serial->isConnected()) {
     uint8_t f[1] = {PUSH_CODE_MSG_WAITING};

@@ -693,6 +693,7 @@ De host-overrides staan in de header omdat `RdmChatMesh` een `rdm::Node` als mem
 
 ```cpp
 #include <helpers/BaseChatMesh.h>
+#include <helpers/rdm/RdmCodec.h>
 #include <helpers/rdm/RdmNode.h>
 
 class RdmChatMesh : public BaseChatMesh {
@@ -720,6 +721,8 @@ protected:
   void onAdvertRecv(mesh::Packet* pkt, const mesh::Identity& id, uint32_t ts, const uint8_t* app_data, size_t len) override;
   // K3: contact verwijderd omdat het een verborgen peer is; de app-kant meldt het aan de app en persisteert de contacten
   virtual void rdmOnContactRemoved(const ContactInfo& removed) {}
+  // Een plain DM is in de inbox opgeslagen (RecvResult::NEW): de UI-preview die upstream in onMessageRecv geeft (D60)
+  virtual void rdmOnMessageStored(mesh::Packet* pkt, ContactInfo& from, const rdm::codec::TxtParsed& p) {}
 
 private:
   // Wat rdm::Node van de mesh ziet; zet door naar privé-methoden van RdmChatMesh. RdmChatMesh is zelf geen host:
@@ -768,6 +771,7 @@ K3 (besluit K3): `RdmChatMesh::onAdvertRecv` geeft een advert van een verborgen 
 - Volgorde bij opstarten: `store.begin()`, `begin()` van de mesh, contacten laden, daarna `rdm().begin()`; `rdm().loop()` in `loop()`.
 - `CMD_SEND_TXT_MSG`: `rdmSendApp`; bij `handled` alleen `RESP_CODE_SENT` met `app_ack`, `flood` en `est_timeout_ms`. `handled == false`: het upstream-pad.
 - `CMD_SYNC_NEXT_MESSAGE`: `rdmNextInbox` tot `false`, en pas als de inbox leeg is de gewone offline queue.
+- UI-preview van een opgeslagen DM: `rdmOnMessageStored` (D60); `MyMesh` doet daar `markConnectionActive` en `Listener::onMessageRecv`.
 - `rtcNow(trusted)`: `trusted` alleen na `CMD_SET_DEVICE_TIME` sinds boot of met een hardware-RTC, niet na `bootstrapRTCfromContacts` (vlag in `MyMesh`; de simulator leest hem via H1).
 - Verbinding: `onClientConnected(rdm_client)` na `CMD_RDM_ENABLE` (0x91 alleen dan), `onClientDisconnected` bij verbreken.
 - App-pushes: `pushUserStatus` -> 0x91 (20 bytes, 3.14), `pushSendConfirmed` -> `PUSH_CODE_SEND_CONFIRMED`, `pushMsgWaiting` -> `PUSH_CODE_MSG_WAITING`.

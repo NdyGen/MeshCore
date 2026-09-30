@@ -1,6 +1,7 @@
 #pragma once
 
 #include <helpers/BaseChatMesh.h>
+#include <helpers/rdm/RdmCodec.h>
 #include <helpers/rdm/RdmNode.h>
 
 // Integration layer between packets and rdm::Node, shared by the companion (MyMesh) and the simulator.
@@ -31,6 +32,8 @@ protected:
   void onAdvertRecv(mesh::Packet* pkt, const mesh::Identity& id, uint32_t ts, const uint8_t* app_data, size_t len) override;
   // K3: a contact was removed because it is a hidden peer; the app side informs the app and persists contacts
   virtual void rdmOnContactRemoved(const ContactInfo& removed) {}
+  // A plain DM was stored in the inbox (RecvResult::NEW): the UI preview upstream gives in onMessageRecv
+  virtual void rdmOnMessageStored(mesh::Packet* pkt, ContactInfo& from, const rdm::codec::TxtParsed& p) {}
 
 private:
   // What rdm::Node sees of the mesh. RdmChatMesh itself is no host: BaseChatMesh::sendAnonReq stays visible to the

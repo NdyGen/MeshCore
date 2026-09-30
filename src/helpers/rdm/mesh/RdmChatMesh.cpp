@@ -1,7 +1,5 @@
 #include "RdmChatMesh.h"
 
-#include <helpers/rdm/RdmCodec.h>
-
 #include <string.h>
 
 // Same defaults as BaseChatMesh.cpp, so fork ACKs and replies keep upstream timing.
@@ -132,9 +130,10 @@ void RdmChatMesh::handleTxtPlain(mesh::Packet* pkt, ContactInfo& from, const uin
   if (d.result == rdm::RecvResult::NEW || d.result == rdm::RecvResult::DUPLICATE) {
     from.lastmod = getRTCClock()->getCurrentTime();
   }
+  rdm::codec::TxtParsed p;
+  bool parsed = rdm::codec::parseTxtPlain(data, len, p);
   if (d.send_ack_r) {
-    rdm::codec::TxtParsed p;
-    uint8_t ext = rdm::codec::parseTxtPlain(data, len, p) ? p.ext_attempt : 0;
+    uint8_t ext = parsed ? p.ext_attempt : 0;
     uint8_t rnd;
     getRNG()->random(&rnd, 1);
     uint8_t ack[7];
@@ -148,6 +147,7 @@ void RdmChatMesh::handleTxtPlain(mesh::Packet* pkt, ContactInfo& from, const uin
     }
   }
   if (d.send_ack_s) rdmSendAckTo(from, d.ack_s, 6);
+  if (d.result == rdm::RecvResult::NEW && parsed) rdmOnMessageStored(pkt, from, p);
 }
 
 void RdmChatMesh::sendReply(mesh::Packet* pkt, ContactInfo& from, const uint8_t* secret, const uint8_t* reply,

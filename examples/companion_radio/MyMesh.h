@@ -317,8 +317,7 @@ public:
   bool rtcTrusted() const { return _rdm_time_set || _rdm_hw_rtc; }
 
 protected:
-  void onPeerDataRecv(mesh::Packet* pkt, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data,
-                      size_t len) override;
+  void rdmOnMessageStored(mesh::Packet* pkt, ContactInfo& from, const rdm::codec::TxtParsed& p) override;
   void rdmOnContactRemoved(const ContactInfo& removed) override;   // a contact turned out to be a mailbox (K3)
 
 private:
@@ -357,7 +356,6 @@ private:
   bool _rdm_client = false;       // CMD_RDM_ENABLE on this connection (K9)
   bool _rdm_connected = false;
   bool _rdm_replaying = false;    // 0x91 replay after CMD_RDM_ENABLE: no status-channel lines again
-  bool _rdm_new_msg = false;      // pushMsgWaiting() during the current onPeerDataRecv()
 #endif
 };
 
