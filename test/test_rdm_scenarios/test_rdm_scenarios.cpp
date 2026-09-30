@@ -707,7 +707,7 @@ TEST(RdmScenario, S07_Mailbox) {
 TEST(RdmScenario, S07_Mailbox_CompanionNode) { runS07(Layout::VIA_REPEATER, false, CompanionModel::FIRMWARE); }
 
 TEST(RdmScenario, S07_MailboxEchteMbxd) {
-  ASSERT_FALSE(SubprocessBackend::locateMbxd().empty()) << "mbxd.py not found (set RDM_MBXD or run from the repo root)";
+  ASSERT_FALSE(SubprocessBackend::locateMbxd().empty()) << SubprocessBackend::missingDaemon();
   runS07(Layout::VIA_REPEATER, true);
 }
 
