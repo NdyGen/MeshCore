@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Copies the files a work package owns (docs/reliable-dm/06-implementatieplan-v1.md par. 5) from a worker's
-# worktree into this checkout, then runs tools/rdm/run-all-tests.sh (all native envs and the mbxd pytest).
+# worktree into this checkout, then runs tools/rdm/run-all-tests.sh (all native envs and the daemon's cargo tests).
 #
 #   tools/rdm/integrate.sh [--dry-run] [--no-test] [--with-headers] <worktree> [wp...]
 #
@@ -50,22 +50,22 @@ R=src/helpers/rdm
 owned() {
   case "$1" in
     wp0) echo "$R/RdmTypes.h $R/RdmConfig.h $R/RdmCrypto.h $R/RdmCodec.h $R/RdmStorage.h $R/RdmClock.h $R/RdmContacts.h
-               $R/RdmOutbox.h $R/RdmInbox.h $R/RdmFetcher.h $R/RdmNode.h $R/RdmChatMesh.h $R/MailboxCore.h
+               $R/RdmOutbox.h $R/RdmInbox.h $R/RdmFetcher.h $R/RdmNode.h $R/mesh/RdmChatMesh.h $R/mailbox/MailboxCore.h
                test/rdm_support/MemFileIO.h test/rdm_support/MemFileIO.cpp test/rdm_support/SimFileIO.h
                test/test_rdm_headers/" ;;
     wp1) echo "$R/RdmCrypto.cpp $R/RdmCodec.cpp test/test_rdm_crypto/ test/test_rdm_codec/" ;;
-    wp2) echo "$R/RdmStorage.cpp $R/RdmClock.cpp $R/RdmContacts.cpp $R/ArduinoFileIO.h $R/ArduinoFileIO.cpp
+    wp2) echo "$R/RdmStorage.cpp $R/RdmClock.cpp $R/RdmContacts.cpp $R/arduino/ArduinoFileIO.h $R/arduino/ArduinoFileIO.cpp
                test/test_rdm_storage/ test/test_rdm_clock/ test/test_rdm_contacts/" ;;
     wp3) echo "$R/RdmOutbox.cpp test/test_rdm_outbox/" ;;
     wp4) echo "$R/RdmInbox.cpp $R/RdmFetcher.cpp test/test_rdm_inbox/ test/test_rdm_fetcher/" ;;
-    wp5) echo "$R/RdmNode.cpp $R/RdmChatMesh.cpp src/Mesh.cpp src/helpers/BaseChatMesh.h src/helpers/BaseChatMesh.cpp
+    wp5) echo "$R/RdmNode.cpp $R/mesh/RdmChatMesh.cpp src/Mesh.cpp src/helpers/BaseChatMesh.h src/helpers/BaseChatMesh.cpp
                test/test_rdm_node/ test/rdm_support/RdmSimCompanion.h test/rdm_support/RdmSimCompanion.cpp" ;;
     wp6) echo "examples/companion_radio/main.cpp examples/companion_radio/MyMesh.h examples/companion_radio/MyMesh.cpp
                examples/companion_radio/DataStore.h examples/companion_radio/DataStore.cpp
                examples/companion_radio/RdmCompanionProto.h
                variants/heltec_v3/platformio.ini variants/rak4631/platformio.ini variants/lilygo_tbeam_SX1262/platformio.ini
                test/test_rdm_companion_proto/" ;;
-    wp7) echo "$R/MailboxCore.cpp examples/mailbox_server/main.cpp examples/mailbox_server/MailboxMesh.h
+    wp7) echo "$R/mailbox/MailboxCore.cpp examples/mailbox_server/main.cpp examples/mailbox_server/MailboxMesh.h
                examples/mailbox_server/MailboxMesh.cpp examples/mailbox_server/SerialPiBackend.h
                examples/mailbox_server/SerialPiBackend.cpp test/test_rdm_mailbox_core/
                test/rdm_support/RdmSimMailbox.h test/rdm_support/RdmSimMailbox.cpp" ;;
@@ -85,8 +85,8 @@ module_headers() {
     wp2) echo "$R/RdmStorage.h $R/RdmClock.h $R/RdmContacts.h" ;;
     wp3) echo "$R/RdmOutbox.h" ;;
     wp4) echo "$R/RdmInbox.h $R/RdmFetcher.h" ;;
-    wp5) echo "$R/RdmNode.h $R/RdmChatMesh.h" ;;
-    wp7) echo "$R/MailboxCore.h" ;;
+    wp5) echo "$R/RdmNode.h $R/mesh/RdmChatMesh.h" ;;
+    wp7) echo "$R/mailbox/MailboxCore.h" ;;
     *) echo "" ;;
   esac
 }
@@ -156,8 +156,8 @@ TAKEN_HEADERS=""
 if [ $WITH_HEADERS -eq 1 ]; then
   for wp in $WPS; do TAKEN_HEADERS="$TAKEN_HEADERS $(module_headers "$wp")"; done
   overlay="$(mktemp -d)"
-  cp "$REPO/$R"/*.h "$overlay/"
-  for h in $TAKEN_HEADERS; do [ -f "$SRC/$h" ] && cp "$SRC/$h" "$overlay/"; done
+  cp -R "$REPO/$R/." "$overlay/"
+  for h in $TAKEN_HEADERS; do [ -f "$SRC/$h" ] && cp "$SRC/$h" "$overlay/${h#"$R/"}"; done
   if ! python3 "$REPO/tools/rdm/check-headers.py" "$overlay"; then
     rm -rf "$overlay"
     echo "refusing --with-headers: the worktree headers change the fixed public API (06 par. 3)" >&2
