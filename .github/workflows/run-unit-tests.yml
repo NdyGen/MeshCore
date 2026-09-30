@@ -19,8 +19,53 @@ jobs:
       - name: Setup Build Environment
         uses: ./.github/actions/setup-build-environment
 
+      # The mailbox daemon crate lives at examples/mailbox_server/meshcore-mailboxd; branches from before the
+      # rename still have it as mbxd-rs, older ones not at all (then the native envs run without it).
+      - name: Locate Mailbox Daemon Crate
+        id: crate
+        shell: bash
+        run: |
+          for dir in examples/mailbox_server/meshcore-mailboxd examples/mailbox_server/mbxd-rs; do
+            if [ -f "$dir/Cargo.toml" ]; then
+              echo "dir=$dir" >> "$GITHUB_OUTPUT"
+              echo "args=--mbxd-crate $dir" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "args=--no-mbxd" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Rust
+        if: steps.crate.outputs.dir != ''
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        if: steps.crate.outputs.dir != ''
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ steps.crate.outputs.dir }}/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles(format('{0}/Cargo.lock', steps.crate.outputs.dir)) }}
+          restore-keys: ${{ runner.os }}-cargo-
+
       - name: Run Unit Tests
-        run: pio test -e native -e native_kiss_modem -e native_sim -e native_rdm -vv
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: tools/rdm/run-all-tests.sh ${{ steps.crate.outputs.args }}
+
+      - name: Show Logs of Failed Steps
+        if: failure()
+        shell: bash
+        run: |
+          for rc in "$RUNNER_TEMP"/rdm-tests-*/*.rc; do
+            [ -f "$rc" ] || continue
+            [ "$(cat "$rc")" = 0 ] && continue
+            log="${rc%.rc}.log"
+            echo "::group::$(basename "$log")"
+            cat "$log"
+            echo "::endgroup::"
+          done
 
       - name: Upload Test Results
         # Upload test results even if the test step failed.
@@ -28,4 +73,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-results
-          path: .pio/build/native/
+          path: |
+            .pio/build/native/
+            ${{ runner.temp }}/rdm-tests-*/
