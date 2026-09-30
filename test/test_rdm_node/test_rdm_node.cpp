@@ -321,7 +321,8 @@ TEST(RdmNode, NextWakeupIsNeverLate) {
       uint32_t step = 1000;
       if (jump) {
         step = p.bob.node->nextWakeupMillis(p.net.ms);
-        uint32_t w = p.alice.node->nextWakeupMillis(p.net.ms);
+        // an offline node never loops, so its wakeup stays due and would pin the step to 1 ms
+        uint32_t w = p.alice.online ? p.alice.node->nextWakeupMillis(p.net.ms) : UINT32_MAX;
         if (w < step) step = w;
         if (step == 0) step = 1;
         if (step > end - p.net.ms) step = end - p.net.ms;
