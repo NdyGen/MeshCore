@@ -20,22 +20,27 @@
 
 namespace sim { namespace frames {
 
-constexpr uint8_t CMD_APP_START         = 1;
-constexpr uint8_t CMD_SEND_TXT_MSG      = 2;
-constexpr uint8_t CMD_GET_CONTACTS      = 4;
-constexpr uint8_t CMD_SET_DEVICE_TIME   = 6;
-constexpr uint8_t CMD_SEND_SELF_ADVERT  = 7;
-constexpr uint8_t CMD_SYNC_NEXT_MESSAGE = 10;
-constexpr uint8_t CMD_RESET_PATH        = 13;
-constexpr uint8_t CMD_DEVICE_QUERY      = 22;
+constexpr uint8_t CMD_APP_START          = 1;
+constexpr uint8_t CMD_SEND_TXT_MSG       = 2;
+constexpr uint8_t CMD_GET_CONTACTS       = 4;
+constexpr uint8_t CMD_SET_DEVICE_TIME    = 6;
+constexpr uint8_t CMD_SEND_SELF_ADVERT   = 7;
+constexpr uint8_t CMD_ADD_UPDATE_CONTACT = 9;
+constexpr uint8_t CMD_SYNC_NEXT_MESSAGE  = 10;
+constexpr uint8_t CMD_RESET_PATH         = 13;
+constexpr uint8_t CMD_DEVICE_QUERY       = 22;
+constexpr uint8_t CMD_GET_CHANNEL        = 31;
 
 constexpr uint8_t RESP_CODE_OK               = 0;
 constexpr uint8_t RESP_CODE_ERR              = 1;
 constexpr uint8_t RESP_CODE_END_OF_CONTACTS  = 4;
 constexpr uint8_t RESP_CODE_SENT             = 6;
 constexpr uint8_t RESP_CODE_NO_MORE_MESSAGES = 10;
+constexpr uint8_t RESP_CODE_CHANNEL_INFO     = 18;
 
-constexpr uint8_t PUSH_CODE_MSG_WAITING = 0x83;
+constexpr uint8_t PUSH_CODE_MSG_WAITING     = 0x83;
+constexpr uint8_t PUSH_CODE_NEW_ADVERT      = 0x8A;
+constexpr uint8_t PUSH_CODE_CONTACT_DELETED = 0x8F;
 constexpr uint8_t ERR_CODE_ILLEGAL_ARG  = 6;
 constexpr uint8_t APP_PROTOCOL_VER      = 3;
 

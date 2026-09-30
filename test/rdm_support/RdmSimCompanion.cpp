@@ -5,11 +5,6 @@
 
 namespace sim {
 
-// Same constants as examples/companion_radio/MyMesh.cpp (est_timeout the app receives).
-static constexpr uint32_t SEND_TIMEOUT_BASE_MILLIS = 500;
-static constexpr float FLOOD_SEND_TIMEOUT_FACTOR = 16.0f;
-static constexpr float DIRECT_SEND_PERHOP_FACTOR = 6.0f;
-static constexpr uint32_t DIRECT_SEND_PERHOP_EXTRA_MILLIS = 250;
 static const char* CONTACTS_FILE = "/contacts";
 
 class RdmSimCompanion::Impl : public DeterministicPeerData<RdmChatMesh>, private rdm::NodeAppSink {

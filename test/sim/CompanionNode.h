@@ -8,7 +8,7 @@
 #include <FS.h>
 #include <MyMesh.h>
 #ifdef WITH_RELIABLE_DM
-  #include <SimFileIO.h>
+  #include <helpers/rdm/arduino/ArduinoFileIO.h>
 #endif
 
 #include <deque>
@@ -83,19 +83,20 @@ public:
   void advert(bool flood = true);
   void reset_path(const SimNode& to);
   // Any other companion command (e.g. fork extensions): queued like the rest, `on_response` gets every reply frame.
-  // Multi-frame replies (CMD_GET_CONTACTS, CMD_RDM_LIST_OUTBOX: START..END) keep the command in flight until
-  // their closing frame or an error.
+  // A multi-frame reply keeps the command in flight until its closing frame: `closing_code` names it (a fork list
+  // gives its END code); by default the first reply closes, except CMD_GET_CONTACTS (RESP_CODE_END_OF_CONTACTS).
+  // An error frame always closes.
   using ResponseFn = std::function<void(const std::vector<uint8_t>& frame)>;
-  void send_command(std::vector<uint8_t> frame, ResponseFn on_response = nullptr);
+  static constexpr uint8_t FIRST_REPLY = 0xFF;
+  void send_command(std::vector<uint8_t> frame, ResponseFn on_response = nullptr, uint8_t closing_code = FIRST_REPLY);
 
   bool idle() const { return !_in_flight && _pending.empty(); }
   uint64_t nextDeadlineMs() const;
   const std::vector<Msg>& inbox() const { return _inbox; }
-  size_t inbox_count(const std::string& text) const;
+  size_t inbox_count(const std::string& text) const { return countText(_inbox, text); }
   const Sent& sent(int id) const { return _sent.at(id); }
-  const std::vector<Sent>& sent_log() const { return _sent; }
   Status retry_status(int retry_id) const;
-  bool retry_done(int retry_id) const { return _retries.at(retry_id).done; }
+  bool retry_done(int retry_id) const { return _retries.done(retry_id); }
   const std::vector<std::vector<uint8_t>>& push_log() const { return _pushes; }
   size_t push_count(uint8_t code) const;
 
@@ -107,14 +108,7 @@ private:
     std::vector<uint8_t> frame;
     int sent_id;  // for CMD_SEND_TXT_MSG
     ResponseFn on_response;
-  };
-  struct RetryJob {
-    int to_index;
-    std::string text;
-    uint32_t timestamp;
-    AppRetry policy;
-    std::vector<int> attempts;
-    bool done;
+    uint8_t closing_code;
   };
 
   CompanionNode& _node;
@@ -124,14 +118,14 @@ private:
   bool _sync_queued = false;
   std::vector<Msg> _inbox;
   std::vector<Sent> _sent;
-  std::vector<RetryJob> _retries;
+  RetryTracker _retries;
   std::vector<std::vector<uint8_t>> _pushes;
 
   void enqueue(std::vector<uint8_t> frame, int sent_id = -1);
+  bool closes(const Cmd& cmd, const std::vector<uint8_t>& f) const;
   void handleResponse(const Cmd& cmd, const std::vector<uint8_t>& f);
   void handlePush(const std::vector<uint8_t>& f);
   void handleContactMsg(const std::vector<uint8_t>& f);
-  int indexForPrefix(const uint8_t* prefix, int len) const;
 };
 
 class CompanionNode : public SimNode {
@@ -158,7 +152,7 @@ protected:
 private:
   fs::BoundFS _flash;
 #ifdef WITH_RELIABLE_DM
-  std::unique_ptr<SimFileIO> _rdm_io;   // stateless: files live in fs(), so a new one per boot is fine
+  std::unique_ptr<rdm::ArduinoFileIO> _rdm_io;   // stateless, on the node's flash like main.cpp: a new one per boot
 #endif
   std::unique_ptr<DataStore> _store;
   MyMesh* _firmware = nullptr;

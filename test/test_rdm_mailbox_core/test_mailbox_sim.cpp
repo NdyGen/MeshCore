@@ -2,6 +2,7 @@
 
 #include <ChatNode.h>
 #include <RdmSimMailbox.h>
+#include <SimChatMesh.h>
 #include <helpers/rdm/RdmCodec.h>
 #include <helpers/rdm/RdmCrypto.h>
 
@@ -19,27 +20,15 @@ namespace {
 
 // A client on the real BaseChatMesh that only speaks the mailbox requests; responses are logged by tag.
 class MbxClient : public SimNode {
-  class Impl : public BaseChatMesh {
+  class Impl : public SimChatMeshBase {
     MbxClient& _node;
 
   public:
     Impl(MbxClient& n, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc,
          mesh::PacketManager& mgr, mesh::MeshTables& tables)
-        : BaseChatMesh(radio, ms, rng, rtc, mgr, tables), _node(n) {}
+        : SimChatMeshBase(radio, ms, rng, rtc, mgr, tables), _node(n) {}
 
   protected:
-    void onDiscoveredContact(ContactInfo&, bool, uint8_t, const uint8_t*) override {}
-    ContactInfo* processAck(const uint8_t*) override { return nullptr; }
-    void onContactPathUpdated(const ContactInfo&) override {}
-    void onMessageRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*) override {}
-    void onCommandDataRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*) override {}
-    void onCLICommandRecv(const ContactInfo&, mesh::Packet*, uint32_t, const char*, char*) override {}
-    void onSignedMessageRecv(const ContactInfo&, mesh::Packet*, uint32_t, const uint8_t*, const char*) override {}
-    uint32_t calcFloodTimeoutMillisFor(uint32_t airtime) const override { return 500 + 16 * airtime; }
-    uint32_t calcDirectTimeoutMillisFor(uint32_t airtime, uint8_t) const override { return 500 + 6 * airtime; }
-    void onSendTimeout() override {}
-    void onChannelMessageRecv(const mesh::GroupChannel&, mesh::Packet*, uint32_t, const char*) override {}
-    uint8_t onContactRequest(const ContactInfo&, uint32_t, const uint8_t*, uint8_t, uint8_t*) override { return 0; }
     void onContactResponse(const ContactInfo&, const uint8_t* data, uint8_t len) override {
       if (len < 4) return;
       uint32_t tag;

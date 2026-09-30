@@ -231,7 +231,7 @@ public:
       } else {
         done({});
       }
-    });
+    }, rdm::companion::RESP_CODE_RDM_OUTBOX_END);
   }
 
 private:
