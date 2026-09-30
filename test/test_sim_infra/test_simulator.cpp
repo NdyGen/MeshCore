@@ -2,6 +2,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <string>
+#include <vector>
+
 #include <FS.h>
 
 #include "ChatNode.h"
@@ -27,13 +32,36 @@ std::vector<TxRecord> runScenario(uint64_t seed) {
   return s.tx_log();
 }
 
-bool sameLog(const std::vector<TxRecord>& x, const std::vector<TxRecord>& y) {
-  if (x.size() != y.size()) return false;
-  for (size_t i = 0; i < x.size(); i++) {
-    if (x[i].t_ms != y[i].t_ms || x[i].from != y[i].from || x[i].raw != y[i].raw) return false;
+std::string hex(const std::vector<uint8_t>& v) {
+  std::string s;
+  char b[4];
+  for (uint8_t c : v) {
+    snprintf(b, sizeof(b), "%02x", c);
+    s += b;
   }
-  return true;
+  return s;
 }
+
+std::string describe(const TxRecord& r) {
+  char b[64];
+  snprintf(b, sizeof(b), "t=%llu from=%d len=%zu raw=", (unsigned long long)r.t_ms, r.from, r.raw.size());
+  return b + hex(r.raw);
+}
+
+// Index of the first record that differs in time, sender or bytes; x.size() when x is a prefix of (or equal to) y.
+size_t firstDifference(const std::vector<TxRecord>& x, const std::vector<TxRecord>& y) {
+  const size_t n = std::min(x.size(), y.size());
+  for (size_t i = 0; i < n; i++) {
+    if (x[i].t_ms != y[i].t_ms || x[i].from != y[i].from || x[i].raw != y[i].raw) return i;
+  }
+  return n;
+}
+
+bool sameLog(const std::vector<TxRecord>& x, const std::vector<TxRecord>& y) {
+  return x.size() == y.size() && firstDifference(x, y) == x.size();
+}
+
+std::string at(const std::vector<TxRecord>& log, size_t i) { return i < log.size() ? describe(log[i]) : "<none>"; }
 
 }
 
@@ -41,7 +69,10 @@ TEST(Simulator, SameSeedGivesIdenticalRun) {
   auto run1 = runScenario(99);
   auto run2 = runScenario(99);
   ASSERT_FALSE(run1.empty());
-  EXPECT_TRUE(sameLog(run1, run2));
+  // The first differing record shows what diverged (timing, sender or bytes), not only that something did.
+  const size_t i = firstDifference(run1, run2);
+  EXPECT_TRUE(sameLog(run1, run2)) << "tx_log differs at index " << i << " of " << run1.size() << "/" << run2.size()
+                                   << "\n  run1: " << at(run1, i) << "\n  run2: " << at(run2, i);
   EXPECT_FALSE(sameLog(run1, runScenario(100))) << "another seed gives other identities, so other bytes";
 }
 

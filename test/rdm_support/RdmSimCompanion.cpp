@@ -12,13 +12,13 @@ static constexpr float DIRECT_SEND_PERHOP_FACTOR = 6.0f;
 static constexpr uint32_t DIRECT_SEND_PERHOP_EXTRA_MILLIS = 250;
 static const char* CONTACTS_FILE = "/contacts";
 
-class RdmSimCompanion::Impl : public RdmChatMesh, private rdm::NodeAppSink {
+class RdmSimCompanion::Impl : public DeterministicPeerData<RdmChatMesh>, private rdm::NodeAppSink {
   RdmSimCompanion& _n;
 
 public:
   Impl(RdmSimCompanion& n, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc,
        mesh::PacketManager& mgr, mesh::MeshTables& tables, rdm::FileIO& io)
-      : RdmChatMesh(radio, ms, rng, rtc, mgr, tables, io, *this), _n(n) {}
+      : DeterministicPeerData<RdmChatMesh>(radio, ms, rng, rtc, mgr, tables, io, *this), _n(n) {}
 
   rdm::Node& node() { return rdm(); }
   bool nextInbox(rdm::InRecord& r) { return rdmNextInbox(r); }

@@ -331,6 +331,24 @@ public:
   uint64_t dropped_filter() const { return _dropped_filter; }
 };
 
+// BaseChatMesh::onPeerDataRecv() (src/helpers/BaseChatMesh.cpp) reads data[len + 1] for the optional attempt
+// byte behind the text's NUL. When the plaintext fills its last AES block exactly, that byte is uninitialised
+// stack of Mesh::onRecvPacket() and ends up in the ACK; on real hardware it is whatever the stack held. The
+// simulator pins it to 0 so two runs with one seed give identical bytes. The buffer is MAX_PACKET_PAYLOAD long
+// and upstream itself writes data[len].
+template <class M>
+class DeterministicPeerData : public M {
+public:
+  using M::M;
+
+protected:
+  void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data,
+                      size_t len) override {
+    data[len + 1] = 0;
+    M::onPeerDataRecv(packet, type, sender_idx, secret, data, len);
+  }
+};
+
 const char* payloadTypeName(uint8_t type);
 
 }
