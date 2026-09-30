@@ -1,6 +1,6 @@
 #include "MemMailboxBackend.h"
 
-#include <SHA256.h>
+#include <helpers/rdm/RdmCrypto.h>
 
 #include <algorithm>
 #include <string.h>
@@ -27,15 +27,6 @@ MbxState wireState(MemMailboxBackend::MsgState s) {
     case MemMailboxBackend::MsgState::SYNC_EXPIRED: return MbxState::SYNC_EXPIRED;
   }
   return MbxState::UNKNOWN;
-}
-
-void tokenFor(uint8_t out[8], const uint8_t k_owner[16], const uint8_t sender[32]) {
-  SHA256 sha;
-  uint8_t mac[32];
-  sha.resetHMAC(k_owner, 16);
-  sha.update(sender, 32);
-  sha.finalizeHMAC(k_owner, 16, mac, sizeof(mac));
-  memcpy(out, mac, 8);
 }
 
 }
@@ -73,7 +64,7 @@ bool MemMailboxBackend::pollAcl(uint8_t pub_out[32], bool& is_owner, uint8_t own
 }
 
 void MemMailboxBackend::housekeeping(uint32_t t) {
-  // final_at is when the timer ran out, not when it was noticed, as in mbxd.
+  // final_at is when the timer ran out, not when it was noticed, as in the daemon.
   for (auto& m : _msgs) {
     if ((m.state == MsgState::STORED || m.state == MsgState::SENT) && m.t_radio <= t) {
       m.state = MsgState::EXPIRED;
@@ -171,7 +162,7 @@ bool MemMailboxBackend::reg(uint32_t id, const uint8_t sender_pub[32], const uin
     return true;
   }
   uint8_t expected[8];
-  tokenFor(expected, o->k_owner, sender_pub);
+  crypto::tokenB(expected, o->k_owner, sender_pub);
   if (isDenied(owner, sender_pub) || memcmp(expected, token, 8) != 0) {
     reply(BackendReply::Kind::REG, id, MbxCode::NOT_AUTH);
     return true;
@@ -316,10 +307,7 @@ bool MemMailboxBackend::stat(uint32_t id, const uint8_t sender_pub[32], const ui
       if (_lie == Lie::DELIVERED_WITH_ACK_R) {
         memcpy(item.ack, m->ack_r, 6);
       } else {
-        for (uint8_t k = 0; k < 6; k++) {
-          _lie_rng = _lie_rng * 1664525u + 1013904223u;
-          item.ack[k] = (uint8_t)(_lie_rng >> 24);
-        }
+        for (uint8_t k = 0; k < 6; k++) item.ack[k] = (uint8_t)(_lie_rng.next() >> 24);
       }
     }
   }
