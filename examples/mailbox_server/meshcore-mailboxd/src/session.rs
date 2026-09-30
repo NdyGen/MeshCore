@@ -7,7 +7,7 @@ use log::{error, info, warn};
 use crate::domain::policy::TIME_INTERVAL_S;
 use crate::domain::usecases::{Deposit, FetchOutcome, FetchRequest, RegOutcome, StoreOutcome};
 use crate::mailbox::Mailbox;
-use crate::protocol::{self, FETCH_FLAG_NO_PAYLOAD, LineError, Reply, Request, StatItem};
+use crate::protocol::{self, FETCH_FLAG_NO_PAYLOAD, LineError, PROTO, Reply, Request, StatItem};
 use crate::storage::{Storage, StorageError};
 use crate::system::Clock;
 use crate::types::{Code, UnixTime};
@@ -81,7 +81,7 @@ impl<S: Storage, C: Clock> Session<S, C> {
         };
         let now = self.clock.now();
         let reply = match request {
-            Request::Hello { firmware } => return self.hello(&firmware, now),
+            Request::Hello { firmware, .. } => return self.hello(&firmware, now),
             Request::Time { unix } => {
                 if !self.clock.set(unix.into()) {
                     warn!("unknown command: {}", clip(line));
@@ -227,7 +227,7 @@ impl<S: Storage, C: Clock> Session<S, C> {
                 owner4: e.owner4,
             })
             .collect();
-        replies.extend([Reply::Ready, time]);
+        replies.extend([Reply::Ready { proto: PROTO }, time]);
         Ok(replies)
     }
 

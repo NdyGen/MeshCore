@@ -9,14 +9,20 @@ pub use crate::types::Report;
 use crate::types::{Ack, Code, KOwner, Owner4, PktHash, Pubkey, RequestId, Role, Token, UnixTime};
 
 pub const REQUEST_PREFIX: &str = "@MBX ";
+/// The session protocol this daemon speaks (`06` par. 3.16); HELLO and `mbx.ready` carry it.
+pub const PROTO: u32 = 2;
 /// Most reports in one FETCH and hashes in one STAT.
 pub const MAX_BATCH: usize = 8;
 pub const FETCH_FLAG_NO_PAYLOAD: u8 = 0x02;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    /// The radio booted. The fields after HELLO are free text (its firmware version).
-    Hello { firmware: String },
+    /// The radio booted or answers `mbx.hello?`. `proto` is the first field when it is decimal; without one
+    /// (the v1 form) the line is a version mismatch. The rest is free text (its firmware version).
+    Hello {
+        proto: Option<u32>,
+        firmware: String,
+    },
     Store {
         id: RequestId,
         owner4: Owner4,
@@ -55,12 +61,17 @@ pub struct StatItem {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
+    /// Asks the radio for a HELLO; sent once when the daemon starts.
+    HelloQuery,
     Acl {
         pubkey: Pubkey,
         role: Role,
         owner4: Owner4,
     },
-    Ready,
+    /// Closes an ACL series; the radio is ready only when `proto` is its own.
+    Ready {
+        proto: u32,
+    },
     Time(UnixTime),
     Store {
         id: RequestId,
@@ -131,12 +142,7 @@ pub fn parse_line(line: &str) -> Result<Option<Request>, LineError> {
         "REG" => ("REG", parse_reg(&fields)),
         "FETCH" => ("FETCH", parse_fetch(&fields)),
         "STAT" => ("STAT", parse_stat(&fields)),
-        "HELLO" => (
-            "HELLO",
-            Ok(Request::Hello {
-                firmware: fields.join(" "),
-            }),
-        ),
+        "HELLO" => ("HELLO", Ok(parse_hello(&fields))),
         // the value may carry surrounding whitespace (the simulator's TIME line was never strict)
         "TIME" => (
             "TIME",
@@ -248,6 +254,23 @@ fn parse_stat(f: &[&str]) -> Result<Request, FieldError> {
     })
 }
 
+/// `<proto> [<fw>]`, or the v1 form `[<fw>]` whose first field is not a decimal number.
+fn parse_hello(f: &[&str]) -> Request {
+    match f
+        .split_first()
+        .map(|(first, rest)| (u32_field(first), rest))
+    {
+        Some((Ok(proto), rest)) => Request::Hello {
+            proto: Some(proto),
+            firmware: rest.join(" "),
+        },
+        _ => Request::Hello {
+            proto: None,
+            firmware: f.join(" "),
+        },
+    }
+}
+
 fn parse_time(value: &str) -> Result<Request, FieldError> {
     Ok(Request::Time {
         unix: u32_field(value.trim())?,
@@ -345,7 +368,8 @@ impl fmt::Display for Reply {
                 };
                 write!(f, "mbx.acl {pubkey} {role} {owner4}")
             }
-            Reply::Ready => f.write_str("mbx.ready"),
+            Reply::HelloQuery => f.write_str("mbx.hello?"),
+            Reply::Ready { proto } => write!(f, "mbx.ready {proto}"),
             Reply::Time(t) => write!(f, "mbx.time {t}"),
             Reply::Store { id, code, expires } => {
                 write!(f, "mbx.store {id} {:02x} {expires}", code.byte())
@@ -380,7 +404,16 @@ impl fmt::Display for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(REQUEST_PREFIX)?;
         match self {
-            Request::Hello { firmware } => write!(f, "HELLO {firmware}"),
+            Request::Hello { proto, firmware } => {
+                f.write_str("HELLO")?;
+                if let Some(proto) = proto {
+                    write!(f, " {proto}")?;
+                }
+                if !firmware.is_empty() {
+                    write!(f, " {firmware}")?;
+                }
+                Ok(())
+            }
             Request::Store {
                 id,
                 owner4,
@@ -606,19 +639,50 @@ mod tests {
     }
 
     #[test]
-    fn hello_takes_any_fields() {
-        assert_eq!(
-            parse_line("@MBX HELLO"),
+    fn hello_with_protocol_and_optional_firmware() {
+        let hello = |proto, firmware: &str| {
             Ok(Some(Request::Hello {
-                firmware: String::new()
+                proto,
+                firmware: firmware.into(),
             }))
+        };
+        assert_eq!(
+            parse_line("@MBX HELLO 2 1.0-rdm"),
+            hello(Some(2), "1.0-rdm")
         );
+        assert_eq!(parse_line("@MBX HELLO 2"), hello(Some(2), ""));
+        assert_eq!(
+            parse_line("@MBX HELLO 3 1.0-rdm\r"),
+            hello(Some(3), "1.0-rdm")
+        );
+        assert_eq!(
+            parse_line("@MBX HELLO 2 1.0-rdm extra"),
+            hello(Some(2), "1.0-rdm extra")
+        );
+        assert_eq!(
+            parse_line("@MBX HELLO 4294967295"),
+            hello(Some(u32::MAX), "")
+        );
+    }
+
+    #[test]
+    fn hello_v1_form_has_no_protocol() {
+        let v1 = |firmware: &str| {
+            Ok(Some(Request::Hello {
+                proto: None,
+                firmware: firmware.into(),
+            }))
+        };
+        assert_eq!(parse_line("@MBX HELLO"), v1(""));
+        assert_eq!(parse_line("@MBX HELLO 1.0-rdm"), v1("1.0-rdm"));
         assert_eq!(
             parse_line("@MBX HELLO 1.0-rdm extra\r"),
-            Ok(Some(Request::Hello {
-                firmware: "1.0-rdm extra".into()
-            }))
+            v1("1.0-rdm extra")
         );
+        assert_eq!(parse_line("@MBX HELLO sim"), v1("sim"));
+        assert_eq!(parse_line("@MBX HELLO -2"), v1("-2"));
+        assert_eq!(parse_line("@MBX HELLO 4294967296"), v1("4294967296"));
+        assert_eq!(parse_line("@MBX HELLO  2"), v1(" 2"));
     }
 
     #[test]
@@ -735,7 +799,9 @@ mod tests {
                 },
                 format!("mbx.acl {} d 02020202", "01".repeat(32)),
             ),
-            (Reply::Ready, "mbx.ready".into()),
+            (Reply::HelloQuery, "mbx.hello?".into()),
+            (Reply::Ready { proto: 2 }, "mbx.ready 2".into()),
+            (Reply::Ready { proto: PROTO }, "mbx.ready 2".into()),
             (Reply::Time(1_790_000_000), "mbx.time 1790000000".into()),
             (
                 Reply::Store {
@@ -866,13 +932,17 @@ mod tests {
             req.to_string(),
             format!("@MBX FETCH 2 {} 00 00000001 -", "cd".repeat(32))
         );
-        assert_eq!(
+        let hello = |proto, firmware: &str| {
             Request::Hello {
-                firmware: "fw".into()
+                proto,
+                firmware: firmware.into(),
             }
-            .to_string(),
-            "@MBX HELLO fw"
-        );
+            .to_string()
+        };
+        assert_eq!(hello(Some(2), "1.0-rdm"), "@MBX HELLO 2 1.0-rdm");
+        assert_eq!(hello(Some(2), ""), "@MBX HELLO 2");
+        assert_eq!(hello(None, "fw"), "@MBX HELLO fw");
+        assert_eq!(hello(None, ""), "@MBX HELLO");
         assert_eq!(Request::Time { unix: 5 }.to_string(), "@MBX TIME 5");
     }
 

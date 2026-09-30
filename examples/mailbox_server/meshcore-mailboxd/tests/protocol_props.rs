@@ -20,9 +20,20 @@ fn report() -> impl Strategy<Value = Report> {
     })
 }
 
+fn is_decimal(field: &str) -> bool {
+    !field.is_empty() && field.len() <= 10 && field.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn request() -> impl Strategy<Value = Request> {
     prop_oneof![
-        "[ -~]{0,40}".prop_map(|firmware| Request::Hello { firmware }),
+        (proptest::option::of(any::<u32>()), "[ -~]{0,40}")
+            .prop_filter(
+                "a v1 HELLO whose first field is decimal would parse as v2",
+                |(proto, fw)| {
+                    proto.is_some() || !is_decimal(fw.split(' ').next().unwrap_or_default())
+                }
+            )
+            .prop_map(|(proto, firmware)| Request::Hello { proto, firmware }),
         (
             any::<u32>(),
             any::<[u8; 4]>(),
