@@ -4,11 +4,12 @@
 #include <helpers/rdm/RdmFetcher.h>
 
 #include <MemFileIO.h>
+#include <RdmTestStack.h>
+#include <TestUtil.h>
 
 #include <memory>
 #include <string>
 #include <vector>
-
 
 using namespace rdm;
 
@@ -52,34 +53,18 @@ public:
   }
 };
 
-struct Sender {
-  uint8_t pub[32];
-  explicit Sender(uint8_t seed) {
-    for (int i = 0; i < 32; i++) pub[i] = (uint8_t)(seed * 13 + i);
-  }
-};
-
 class FetcherTest : public ::testing::Test {
 protected:
   MemFileIO io;
   Rig rig;
-  std::unique_ptr<RecordFile> inbox_file, reg_file, contacts_file;
-  std::unique_ptr<ContactTable> contacts;
-  std::unique_ptr<Inbox> inbox;
+  RdmTestStack stack{io};
   std::unique_ptr<Fetcher> fetcher;
-  std::vector<std::string> texts;
-  Sender alice{1}, bob{2}, carol{3}, dave{4};
+  // the former per-sender generator `seed * 13 + i`
+  TestKey alice{1 * 13, 1}, bob{2 * 13, 1}, carol{3 * 13, 1}, dave{4 * 13, 1};
 
   void SetUp() override {
-    inbox_file.reset(new RecordFile(io, "/rdm/inbox", 1, 188, 8, false));
-    reg_file.reset(new RecordFile(io, "/rdm/register", 1, 36, 16, true));
-    contacts_file.reset(new RecordFile(io, "/rdm/contacts", 1, 52, 16, true));
-    contacts.reset(new ContactTable(*contacts_file));
-    ASSERT_TRUE(contacts->begin());
-    inbox.reset(new Inbox(*inbox_file, *reg_file, *contacts, rig));
-    bool recreated;
-    ASSERT_TRUE(inbox->begin(recreated));
-    fetcher.reset(new Fetcher(*inbox, rig));
+    stack.boot(rig);
+    fetcher.reset(new Fetcher(*stack.inbox, rig));
     rig.fetcher = fetcher.get();
   }
 
@@ -109,31 +94,14 @@ protected:
   }
 
   // A copy from the mailbox, as Node hands it over while processing a FETCH reply.
-  RecvResult mailboxCopy(const Sender& s, uint32_t ts, const std::string& text, uint8_t hash_byte) {
-    texts.push_back(text);
+  RecvResult mailboxCopy(const TestKey& s, uint32_t ts, const std::string& text, uint8_t hash_byte) {
     uint8_t hash[8];
     memset(hash, hash_byte, 8);
-    RecvInput in;
-    memset(&in, 0, sizeof(in));
-    in.sender_pub = s.pub;
-    in.ts = ts;
-    in.text = texts.back().c_str();
-    in.text_len = (uint8_t)text.size();
-    in.sender_cap = true;
-    in.via_mailbox = true;
-    in.mbx_hash = hash;
-    return inbox->onMessage(in, rig.now).result;
+    return stack.inbox->onMessage(stack.makeRecv(s.pub, ts, text, true, hash), rig.now).result;
   }
 
-  RecvResult direct(const Sender& s, uint32_t ts, const std::string& text) {
-    texts.push_back(text);
-    RecvInput in;
-    memset(&in, 0, sizeof(in));
-    in.sender_pub = s.pub;
-    in.ts = ts;
-    in.text = texts.back().c_str();
-    in.text_len = (uint8_t)text.size();
-    return inbox->onMessage(in, rig.now).result;
+  RecvResult direct(const TestKey& s, uint32_t ts, const std::string& text) {
+    return stack.inbox->onMessage(stack.makeRecv(s.pub, ts, text, false), rig.now).result;
   }
 
   // Boot FETCH without jitter, answered empty.
@@ -199,9 +167,9 @@ TEST_F(FetcherTest, FetchRightAfterSyncCarriesTheSyncedReport) {
   rig.now = T0 + 900;   // the app syncs
   InRecord rec;
   uint16_t slot;
-  ASSERT_TRUE(inbox->nextForApp(rec, slot));
-  inbox->onHandedToApp(slot);
-  inbox->onNextSyncRequest(rig.now);
+  ASSERT_TRUE(stack.inbox->nextForApp(rec, slot));
+  stack.inbox->onHandedToApp(slot);
+  stack.inbox->onNextSyncRequest(rig.now);
   due = expectFetchExactlyAtDue();
   EXPECT_EQ(due, T0 + 900);
   ASSERT_EQ(rig.fetches.back().reports.size(), 1u);
@@ -216,9 +184,9 @@ TEST_F(FetcherTest, DirectSyncDoesNotFetch) {
   ASSERT_EQ(direct(alice, 10, "direct"), RecvResult::NEW);
   InRecord rec;
   uint16_t slot;
-  ASSERT_TRUE(inbox->nextForApp(rec, slot));
-  inbox->onHandedToApp(slot);
-  inbox->onNextSyncRequest(rig.now);
+  ASSERT_TRUE(stack.inbox->nextForApp(rec, slot));
+  stack.inbox->onHandedToApp(slot);
+  stack.inbox->onNextSyncRequest(rig.now);
   EXPECT_EQ(fetcher->nextDue(rig.now), T0 + RDM_FETCH_INTERVAL_S);
 }
 
@@ -258,9 +226,9 @@ TEST_F(FetcherTest, ContinuesDirectlyWhileTheMailboxHasMore) {
 }
 
 TEST_F(FetcherTest, NoPayloadWhenTheInboxIsFull) {
-  const Sender* s[4] = {&alice, &bob, &carol, &dave};
+  const TestKey* s[4] = {&alice, &bob, &carol, &dave};
   for (int i = 0; i < 8; i++) ASSERT_EQ(direct(*s[i / 2], 100 + i, "fill"), RecvResult::NEW);
-  ASSERT_EQ(inbox->freeSlots(), 0);
+  ASSERT_EQ(stack.inbox->freeSlots(), 0);
   fetcher->begin(T0, STORE_ID, 0);
   at(T0);
   ASSERT_EQ(rig.fetches.size(), 1u);
@@ -427,7 +395,7 @@ TEST_F(FetcherTest, HostTimeoutAndLateReply) {
   reply(0, 1, false, T0 + 12);   // arrives after all: the mailbox did take the report
   EXPECT_EQ(fetcher->nextDue(rig.now), T0 + RDM_FETCH_INTERVAL_S) << "late reply cancels the repeat";
   Report r[MAX_BATCH];
-  EXPECT_EQ(inbox->pendingReports(r, MAX_BATCH), 0);
+  EXPECT_EQ(stack.inbox->pendingReports(r, MAX_BATCH), 0);
   reply(0, 1, false, T0 + 13);   // a duplicate reply confirms nothing twice
 }
 

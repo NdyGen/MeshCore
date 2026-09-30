@@ -7,6 +7,7 @@
 #include <helpers/rdm/RdmOutbox.h>
 
 #include <MemFileIO.h>
+#include <TestUtil.h>
 #include <Utils.h>
 
 #include <algorithm>
@@ -54,17 +55,12 @@ public:
   std::vector<Pushed> status;
   std::vector<uint32_t> confirmed;
 
-  FakeHost() {
-    for (int i = 0; i < 32; i++) self[i] = (uint8_t)(0xB0 + i);
-  }
+  FakeHost() { fillPattern(self, sizeof(self), 0xB0, 1); }
 
   void selfPub(uint8_t pub_out[32]) override { memcpy(pub_out, self, 32); }
-  bool lcg = false;   // true: a varying sequence instead of the constant `rnd`
-  uint32_t random32() override {
-    if (!lcg) return rnd;
-    rnd = rnd * 1664525u + 1013904223u;
-    return rnd >> 8;
-  }
+  bool lcg = false;   // true: the `seq` sequence instead of the constant `rnd`
+  Lcg32 seq;
+  uint32_t random32() override { return lcg ? seq.next() >> 8 : rnd; }
   bool contactPub(const uint8_t pub_prefix[6], uint8_t pub_out[32]) override {
     memset(pub_out, 0, 32);
     memcpy(pub_out, pub_prefix, 6);
@@ -146,9 +142,9 @@ protected:
   void boot(uint32_t at) {
     ob.reset();
     contacts.reset();
-    file.reset(new RecordFile(io, "/rdm/outbox", 1, 201, 8, true));
-    wfile.reset(new RecordFile(io, "/rdm/watch", 1, 28, 32, false));
-    cfile.reset(new RecordFile(io, "/rdm/contacts", 1, 52, 16, false));
+    file.reset(new RecordFile(io, Outbox::PATH, 1, Outbox::RECORD_SIZE, 8, true));
+    wfile.reset(new RecordFile(io, Outbox::WATCH_PATH, 1, Outbox::WATCH_RECORD_SIZE, 32, false));
+    cfile.reset(new RecordFile(io, ContactTable::PATH, 1, ContactTable::RECORD_SIZE, 16, false));
     ASSERT_NE(cfile->open(), RecordFile::Open::FAILED);
     contacts.reset(new ContactTable(*cfile));
     ASSERT_TRUE(contacts->begin());
@@ -1516,7 +1512,7 @@ TEST_F(OutboxTest, G17_AnyDrawStaysWithinIntervalAndJ) {
 
 TEST_F(OutboxTest, G17_SchedulesWithVaryingDrawsStayInRange) {
   host.lcg = true;
-  host.rnd = 7;
+  host.seq.s = 7;
   uint32_t c = toCustody("hi");
   std::vector<uint32_t> st = answeredStatuses(7, c);
   uint32_t sched[] = RDM_SCHED_STATUS;
@@ -1623,8 +1619,9 @@ TEST_F(OutboxTest, G17_TwoNodesStartingTogetherDoNotStayInStep) {
   FakeHost other;
   other.rnd = 17;
   MemFileIO io2;
-  RecordFile f2(io2, "/rdm/outbox", 1, 201, 8, true), w2(io2, "/rdm/watch", 1, 28, 32, false),
-      c2(io2, "/rdm/contacts", 1, 52, 16, false);
+  RecordFile f2(io2, Outbox::PATH, 1, Outbox::RECORD_SIZE, 8, true),
+      w2(io2, Outbox::WATCH_PATH, 1, Outbox::WATCH_RECORD_SIZE, 32, false),
+      c2(io2, ContactTable::PATH, 1, ContactTable::RECORD_SIZE, 16, false);
   ASSERT_NE(c2.open(), RecordFile::Open::FAILED);
   ContactTable ct2(c2);
   ASSERT_TRUE(ct2.begin());
