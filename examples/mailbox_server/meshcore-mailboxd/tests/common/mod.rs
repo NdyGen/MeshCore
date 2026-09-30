@@ -6,13 +6,13 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use hmac::{KeyInit, Mac};
-use mbxd::domain::model::Limits;
-use mbxd::mailbox::Mailbox;
-use mbxd::session::Session;
-use mbxd::storage::SqliteStorage;
-pub use mbxd::system::Clock;
-use mbxd::system::FakeClock;
-use mbxd::types::{KOwner, Pubkey, UnixTime};
+use meshcore_mailboxd::domain::model::Limits;
+use meshcore_mailboxd::mailbox::Mailbox;
+use meshcore_mailboxd::session::Session;
+use meshcore_mailboxd::storage::SqliteStorage;
+pub use meshcore_mailboxd::system::Clock;
+use meshcore_mailboxd::system::FakeClock;
+use meshcore_mailboxd::types::{KOwner, Pubkey, UnixTime};
 use sha2::{Digest, Sha256};
 
 pub const T0: UnixTime = 1_790_000_000;
@@ -125,7 +125,7 @@ impl Fixture {
     }
 
     pub fn path(&self) -> PathBuf {
-        self.dir.path().join("mbxd.db")
+        self.dir.path().join("mailbox.db")
     }
 
     pub fn session(&self) -> TestSession {
@@ -171,9 +171,9 @@ pub fn lines(s: &mut TestSession, line: &str) -> Vec<String> {
         .collect()
 }
 
-/// The `mbxd` binary built for these tests.
-pub fn mbxd_bin() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_mbxd"))
+/// The `meshcore-mailboxd` binary built for these tests.
+pub fn daemon_bin() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_meshcore-mailboxd"))
 }
 
 /// `examples/mailbox_server/mbxd/mbxd.py`, the reference implementation.

@@ -1,4 +1,4 @@
-//! The `mbxd` binary as the simulator and the Pi admin use it: command line, `serve --stdio [--fake-clock]`, a
+//! The `meshcore-mailboxd` binary as the simulator and the Pi admin use it: command line, `serve --stdio [--fake-clock]`, a
 //! database made by `mbxd.py`, and the same line sequence through both daemons.
 
 mod common;
@@ -11,8 +11,8 @@ use std::time::Duration;
 
 use common::*;
 
-fn mbxd(db: &Path, args: &[&str], stdin: Option<&str>) -> Output {
-    run(Command::new(mbxd_bin()), db, args, stdin)
+fn daemon(db: &Path, args: &[&str], stdin: Option<&str>) -> Output {
+    run(Command::new(daemon_bin()), db, args, stdin)
 }
 
 fn mbxd_py_run(db: &Path, args: &[&str], stdin: Option<&str>) -> Output {
@@ -65,7 +65,7 @@ fn skip_without_python() -> bool {
 fn cli_owner_add_list_and_deny() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("cli.db");
-    let out = ok(mbxd(
+    let out = ok(daemon(
         &db,
         &[
             "owner-add",
@@ -80,7 +80,7 @@ fn cli_owner_add_list_and_deny() {
     let k = out.split("k_owner ").nth(1).unwrap().trim();
     assert_eq!(out, format!("owner {} k_owner {k}\n", o4(&owner())));
     assert_eq!(unhex(k).len(), 16);
-    let list = ok(mbxd(&db, &["owner-list"], None));
+    let list = ok(daemon(&db, &["owner-list"], None));
     assert_eq!(
         list,
         format!(
@@ -90,7 +90,7 @@ fn cli_owner_add_list_and_deny() {
         )
     );
     assert!(!list.contains(k), "listing does not print secrets");
-    let again = ok(mbxd(
+    let again = ok(daemon(
         &db,
         &[
             "owner-add",
@@ -104,13 +104,13 @@ fn cli_owner_add_list_and_deny() {
         again.ends_with(&format!("k_owner {k}\n")),
         "keeps the key: {again}"
     );
-    assert!(ok(mbxd(&db, &["deny", &o4(&owner()), &hex(&bob())], None)).is_empty());
-    assert!(ok(mbxd(&db, &["undeny", &hex(&owner()), &hex(&bob())], None)).is_empty());
-    let unknown = mbxd(&db, &["deny", "ffffffff", &hex(&bob())], None);
+    assert!(ok(daemon(&db, &["deny", &o4(&owner()), &hex(&bob())], None)).is_empty());
+    assert!(ok(daemon(&db, &["undeny", &hex(&owner()), &hex(&bob())], None)).is_empty());
+    let unknown = daemon(&db, &["deny", "ffffffff", &hex(&bob())], None);
     assert_eq!(unknown.status.code(), Some(2));
     assert_eq!(
         String::from_utf8_lossy(&unknown.stderr),
-        "mbxd: unknown owner ffffffff\n"
+        "meshcore-mailboxd: unknown owner ffffffff\n"
     );
 }
 
@@ -121,7 +121,7 @@ fn cli_rejects_bad_arguments_with_exit_2() {
     let pk = hex(&owner());
     let mut other = owner();
     other[4..].fill(0);
-    assert!(mbxd(&db, &["owner-add", &pk], None).status.success());
+    assert!(daemon(&db, &["owner-add", &pk], None).status.success());
     let cases: Vec<Vec<String>> = vec![
         vec!["owner-add".into(), "abcd".into()],
         vec!["owner-add".into(), "zz".repeat(32)],
@@ -175,7 +175,7 @@ fn cli_rejects_bad_arguments_with_exit_2() {
     ];
     for args in cases {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        let out = mbxd(&db, &args, None);
+        let out = daemon(&db, &args, None);
         assert_eq!(
             out.status.code(),
             Some(2),
@@ -183,10 +183,10 @@ fn cli_rejects_bad_arguments_with_exit_2() {
             String::from_utf8_lossy(&out.stderr)
         );
     }
-    let limits = mbxd(&db, &["owner-add", &pk, "--ttl-days", "0"], None);
+    let limits = daemon(&db, &["owner-add", &pk, "--ttl-days", "0"], None);
     assert_eq!(
         String::from_utf8_lossy(&limits.stderr),
-        "mbxd: ttl_days 1-30, sync_days 1-255, quota 1-255\n"
+        "meshcore-mailboxd: ttl_days 1-30, sync_days 1-255, quota 1-255\n"
     );
 }
 
@@ -194,7 +194,7 @@ fn cli_rejects_bad_arguments_with_exit_2() {
 fn stdio_mode_with_fake_clock() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("stdio.db");
-    ok(mbxd(
+    ok(daemon(
         &db,
         &["owner-add", &hex(&owner()), "--k-owner", &hex(&k_owner())],
         None,
@@ -208,7 +208,7 @@ fn stdio_mode_with_fake_clock() {
         format!("@MBX TIME {}", T0 + 7 * DAY),
         stat_line(3, &hex(&bob()), &[&"07".repeat(8)]),
     ];
-    let out = ok(mbxd(
+    let out = ok(daemon(
         &db,
         &["serve", "--stdio", "--fake-clock"],
         Some(&(lines.join("\n") + "\n")),
@@ -229,7 +229,7 @@ fn stdio_mode_with_fake_clock() {
 #[test]
 fn time_line_ignored_without_fake_clock() {
     let dir = tempfile::tempdir().unwrap();
-    let out = ok(mbxd(
+    let out = ok(daemon(
         &dir.path().join("t.db"),
         &["serve", "--stdio"],
         Some("@MBX TIME 5\n@MBX HELLO\n"),
@@ -250,7 +250,7 @@ fn time_line_ignored_without_fake_clock() {
 #[test]
 fn stdio_answers_each_line_before_eof() {
     let dir = tempfile::tempdir().unwrap();
-    let mut child = Command::new(mbxd_bin())
+    let mut child = Command::new(daemon_bin())
         .arg("--db")
         .arg(dir.path().join("live.db"))
         .args(["serve", "--stdio"])
@@ -290,7 +290,7 @@ fn stdio_answers_each_line_before_eof() {
 #[test]
 fn invalid_utf8_on_stdin_is_debug_output() {
     let dir = tempfile::tempdir().unwrap();
-    let mut child = Command::new(mbxd_bin())
+    let mut child = Command::new(daemon_bin())
         .arg("--db")
         .arg(dir.path().join("u.db"))
         .args(["serve", "--stdio", "--fake-clock"])
@@ -400,7 +400,7 @@ fn uses_a_database_made_by_mbxd_py() {
 
     // the Rust daemon picks up where mbxd.py stopped: registrations, rotation, store_id, ON_RADIO with ACK_R
     assert_eq!(
-        ok(mbxd(&db, &["owner-list"], None)),
+        ok(daemon(&db, &["owner-list"], None)),
         ok(mbxd_py_run(&db, &["owner-list"], None))
     );
     let rs_lines = [
@@ -418,7 +418,7 @@ fn uses_a_database_made_by_mbxd_py() {
         fetch_line(5, &hex(&owner()), 2, "00001111", &[]),
         "@MBX HELLO".to_string(),
     ];
-    let out = ok(mbxd(
+    let out = ok(daemon(
         &db,
         &["serve", "--stdio", "--fake-clock"],
         Some(&(rs_lines.join("\n") + "\n")),
@@ -590,7 +590,7 @@ fn same_replies_and_database_as_mbxd_py() {
             &["serve", "--stdio", "--fake-clock"],
             Some(&input),
         ));
-        let rs = ok(mbxd(
+        let rs = ok(daemon(
             &rs_db,
             &["serve", "--stdio", "--fake-clock"],
             Some(&input),

@@ -4,9 +4,9 @@
 mod common;
 
 use common::*;
-use mbxd::domain::model::Limits;
-use mbxd::domain::policy;
-use mbxd::types::{KOwner, Owner4, Pubkey};
+use meshcore_mailboxd::domain::model::Limits;
+use meshcore_mailboxd::domain::policy;
+use meshcore_mailboxd::types::{KOwner, Owner4, Pubkey};
 use serde_json::Value;
 
 fn vectors() -> Value {

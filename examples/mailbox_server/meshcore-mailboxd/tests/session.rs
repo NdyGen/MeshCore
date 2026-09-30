@@ -4,10 +4,10 @@
 mod common;
 
 use common::*;
-use mbxd::domain::model::Limits;
-use mbxd::mailbox::AdminError;
-use mbxd::transport::{Event, serve};
-use mbxd::types::{KOwner, Owner4, Pubkey, State};
+use meshcore_mailboxd::domain::model::Limits;
+use meshcore_mailboxd::mailbox::AdminError;
+use meshcore_mailboxd::transport::{Event, serve};
+use meshcore_mailboxd::types::{KOwner, Owner4, Pubkey, State};
 
 fn run(s: &mut TestSession, events: Vec<Option<String>>) -> Vec<String> {
     let mut out = Vec::new();
@@ -173,7 +173,7 @@ fn crash_child() {
     let Ok(path) = std::env::var(CRASH_CHILD_ENV) else {
         return;
     };
-    let clock = mbxd::system::FakeClock::new(T0);
+    let clock = meshcore_mailboxd::system::FakeClock::new(T0);
     let mut s = session_at(std::path::Path::new(&path), &clock);
     s.mailbox()
         .storage()
@@ -625,7 +625,7 @@ fn opens_database_without_rotation_column() {
     let fx = Fixture::new();
     rusqlite::Connection::open(fx.path())
         .unwrap()
-        .execute_batch(&mbxd::storage::SCHEMA.replace(", last_sender BLOB", ""))
+        .execute_batch(&meshcore_mailboxd::storage::SCHEMA.replace(", last_sender BLOB", ""))
         .unwrap();
     let mut s = fx.session();
     registered(&mut s, &bob(), Limits::default());

@@ -1,14 +1,14 @@
 # Holds the serial port of the mailbox radio (examples/mailbox_server) and keeps the deposited DMs in SQLite.
 # Install: see README.md next to this file. Adjust the --port path to your radio.
 [Unit]
-Description=MeshCore DM mailbox daemon (mbxd, Rust)
+Description=MeshCore DM mailbox daemon (meshcore-mailboxd)
 
 [Service]
-ExecStart=/opt/mbxd/mbxd --db /var/lib/mbxd/mbxd.db serve --port /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0
-User=mbxd
-Group=mbxd
+ExecStart=/opt/meshcore-mailboxd/meshcore-mailboxd --db /var/lib/meshcore-mailboxd/mailbox.db serve --port /dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_Controller_0001-if00-port0
+User=meshcore-mailboxd
+Group=meshcore-mailboxd
 SupplementaryGroups=dialout
-StateDirectory=mbxd
+StateDirectory=meshcore-mailboxd
 StateDirectoryMode=0700
 Restart=always
 RestartSec=5

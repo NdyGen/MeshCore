@@ -1,4 +1,4 @@
-//! [`Storage`] on SQLite, with the schema and pragmas of `mbxd.py`, so either daemon opens the other's database.
+//! [`Storage`] on SQLite. Schema and pragmas are those of the original Python daemon, so its databases open as they are.
 
 use std::path::Path;
 use std::time::Duration;
@@ -11,7 +11,7 @@ use crate::domain::model::{Limits, Message, Owner};
 use crate::domain::policy::{Deadline, Expiry};
 use crate::types::{Ack, KOwner, Owner4, PktHash, Pubkey, State, UnixTime};
 
-/// Verbatim from `mbxd.py`.
+/// The schema of the original Python daemon, verbatim; `tests/fixtures` holds a database it wrote.
 pub const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS owners (
     pubkey BLOB PRIMARY KEY, owner4 BLOB NOT NULL UNIQUE, k_owner BLOB NOT NULL,

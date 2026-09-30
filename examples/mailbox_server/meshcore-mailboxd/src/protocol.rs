@@ -1,4 +1,4 @@
-//! The line protocol between the mailbox radio and `mbxd` (`06` par. 3.16), parse and format only.
+//! The line protocol between the mailbox radio and the daemon (`06` par. 3.16), parse and format only.
 //!
 //! Requests start with `@MBX `; any other line is the radio's debug output. Fields are separated by exactly one
 //! space, hex may be upper or lower case, base64 is padded. Replies use lowercase hex and a two-digit code.
@@ -137,7 +137,7 @@ pub fn parse_line(line: &str) -> Result<Option<Request>, LineError> {
                 firmware: fields.join(" "),
             }),
         ),
-        // the value may carry surrounding whitespace, as mbxd.py strips it
+        // the value may carry surrounding whitespace (the simulator's TIME line was never strict)
         "TIME" => (
             "TIME",
             parse_time(rest.strip_prefix("TIME ").unwrap_or_default()),
@@ -306,7 +306,7 @@ impl fmt::Display for Base64OrDash<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         use base64::Engine as _;
         match self.0 {
-            // mbxd.py writes '-' for an empty payload too
+            // '-' for an empty payload too, as the original daemon did
             Some(p) if !p.is_empty() => f.write_str(&BASE64.encode(p)),
             _ => f.write_str("-"),
         }
@@ -644,7 +644,7 @@ mod tests {
         }
     }
 
-    // test_mbxd.py test_malformed_lines_get_no_reply, plus the base64 edge cases of Python's strict decoder.
+    // The malformed lines of the original test suite, plus the edge cases of a strict base64 decoder.
     #[test]
     fn malformed_lines() {
         let st = |rid: &str, o4: &str, sender: &str, hash: &str, b64: &str| {

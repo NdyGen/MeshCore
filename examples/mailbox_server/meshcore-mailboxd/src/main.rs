@@ -3,5 +3,5 @@
 use clap::Parser;
 
 fn main() -> std::process::ExitCode {
-    mbxd::cli::main(mbxd::cli::Cli::parse())
+    meshcore_mailboxd::cli::main(meshcore_mailboxd::cli::Cli::parse())
 }

@@ -1,4 +1,4 @@
-//! The command line of `mbxd.py`: `serve` for the radio, the rest for the Pi admin.
+//! The command line: `serve` for the radio, the rest for the Pi admin.
 
 use std::io;
 use std::path::PathBuf;
@@ -16,12 +16,12 @@ use crate::transport::{self, SerialEvents, ServeError};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "mbxd",
-    about = "mbxd: message store of the MeshCore DM mailbox",
+    name = "meshcore-mailboxd",
+    about = "meshcore-mailboxd: message store of the MeshCore DM mailbox",
     infer_long_args = true
 )]
 pub struct Cli {
-    #[arg(long, default_value = "/var/lib/mbxd/mbxd.db")]
+    #[arg(long, default_value = "/var/lib/meshcore-mailboxd/mailbox.db")]
     pub db: PathBuf,
     #[arg(short, long)]
     pub verbose: bool,
@@ -99,7 +99,7 @@ pub enum CliError {
 }
 
 impl CliError {
-    /// 2 for what the operator typed wrong, as `mbxd.py`; 1 for everything else.
+    /// 2 for what the operator typed wrong; 1 for everything else.
     pub fn exit_code(&self) -> u8 {
         match self {
             CliError::Argument(_) | CliError::Limits(_) => 2,
@@ -114,7 +114,7 @@ pub fn main(cli: Cli) -> ExitCode {
     match run(cli) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("mbxd: {e}");
+            eprintln!("meshcore-mailboxd: {e}");
             ExitCode::from(e.exit_code())
         }
     }
@@ -275,8 +275,15 @@ mod tests {
 
     #[test]
     fn abbreviated_long_options_like_argparse() {
-        let cli =
-            Cli::try_parse_from(["mbxd", "--db", "x.db", "serve", "--std", "--fake"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "meshcore-mailboxd",
+            "--db",
+            "x.db",
+            "serve",
+            "--std",
+            "--fake",
+        ])
+        .unwrap();
         assert!(matches!(
             cli.command,
             Command::Serve(Serve {

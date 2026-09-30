@@ -1,7 +1,7 @@
 //! Property tests for the line parser: malformed input never panics and never parses into a request.
 
-use mbxd::protocol::{MAX_BATCH, Report, Request, parse_line};
-use mbxd::types::{Ack, Owner4, PktHash, Pubkey, Token};
+use meshcore_mailboxd::protocol::{MAX_BATCH, Report, Request, parse_line};
+use meshcore_mailboxd::types::{Ack, Owner4, PktHash, Pubkey, Token};
 use proptest::prelude::*;
 
 fn pubkey() -> impl Strategy<Value = Pubkey> {

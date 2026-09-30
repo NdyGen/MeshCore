@@ -181,7 +181,7 @@ impl State {
         }
     }
 
-    /// The `messages.state` column value, as written by `mbxd.py`.
+    /// The `messages.state` column value (the database predates this daemon; the names are kept).
     pub fn db_name(self) -> &'static str {
         match self {
             State::Stored => "stored",

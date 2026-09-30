@@ -1,4 +1,4 @@
-//! The mailbox rules that need no storage (`mbxd/README.md`, "Message states" and "Rules per request").
+//! The mailbox rules that need no storage (README, "Message states" and "Rules per request").
 
 use hmac::{KeyInit, Mac};
 
@@ -301,7 +301,7 @@ mod tests {
         assert_eq!(purge_until(NOW), NOW - 30 * DAY);
     }
 
-    // The report table of mbxd/README.md, every result against every state.
+    // The report table of the README, every result against every state.
     #[test]
     fn report_transitions() {
         use State::*;
