@@ -448,6 +448,7 @@ public:
   void       onMailboxAdvert(const uint8_t mbx_pub_prefix[6], uint32_t now);
   void       onMailboxChanged(const uint8_t pub_prefix[6], uint32_t now);  // nieuwe MBX_INFO of REVOKE (G14)
   void       onClientConnected(bool rdm_client, uint32_t now);             // G5
+  void       onClockJump(uint32_t delta);   // klok sprong delta s vooruit bij de eerste vertrouwde RTC (G6): tijdstempels sinds boot schuiven mee
   void       loop(uint32_t now);
   uint32_t   nextDue(uint32_t now) const;   // vroegste RDM-tijd waarop loop() iets doet; nooit < now; UINT32_MAX: niets
   uint8_t    count() const;
