@@ -1,7 +1,9 @@
 #include "RdmOutbox.h"
 
+#include "RdmBytes.h"
 #include "RdmCodec.h"
 #include "RdmCrypto.h"
+#include "RdmPolicy.h"
 
 #include <string.h>
 
@@ -39,22 +41,10 @@ template <size_t N> uint8_t stepFor(const uint32_t (&s)[N], uint32_t elapsed) {
   return k;
 }
 
-uint32_t waitSecs(uint32_t est_timeout_ms) {                   // G3, G9: max(2 x est_timeout, 30 s)
-  uint32_t s = (uint32_t)(((uint64_t)est_timeout_ms * 2 + 999) / 1000);
-  return s > RDM_WAIT_ACK_MIN_S ? s : RDM_WAIT_ACK_MIN_S;
-}
-
 bool isDue(uint32_t t, uint32_t now) { return t != NEVER && t <= now; }
 bool sinceAtLeast(uint32_t last, uint32_t now, uint32_t secs) { return last == NEVER || now - last >= secs; }
 uint32_t minT(uint32_t a, uint32_t b) { return a < b ? a : b; }
 uint32_t addT(uint32_t t, uint32_t d) { return t == NEVER || t > NEVER - d ? NEVER : t + d; }
-
-void put32(uint8_t* p, uint32_t v) {
-  p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
-}
-uint32_t get32(const uint8_t* p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
 
 void encode(const OutEntry& e, uint8_t* b) {
   memcpy(b, e.pub_prefix, 6);
@@ -93,11 +83,6 @@ bool decode(const uint8_t* b, OutEntry& e) {
   return true;
 }
 
-bool isZero(const uint8_t* p, size_t n) {
-  for (size_t i = 0; i < n; i++) if (p[i]) return false;
-  return true;
-}
-
 bool isCtrl(const OutEntry& e) { return (e.flags & OF_CTRL) != 0; }
 
 bool beforeRadio(OutState s) { return s <= OutState::CUSTODY; }
@@ -121,13 +106,12 @@ Outbox::Outbox(RecordFile& file, RecordFile& watch, ContactTable& contacts, Outb
 
 // G16 first RETRY action, G6 boot kick and G17b repeat: 60-120 s
 uint32_t Outbox::firstDelay() {
-  return RDM_RETRY_FIRST_MIN_S + _host.random32() % (RDM_RETRY_FIRST_MAX_S - RDM_RETRY_FIRST_MIN_S + 1);
+  return firstRetryDelay(_host.random32());
 }
 
 // G17a: every repeating interval gets its own random stretch, so timers of different nodes do not stay in step
 uint32_t Outbox::jittered(uint32_t interval) {
-  uint32_t j = interval / RDM_JITTER_DIV < RDM_JITTER_MAX_S ? interval / RDM_JITTER_DIV : RDM_JITTER_MAX_S;
-  return interval + _host.random32() % (j + 1);
+  return rdm::jittered(interval, _host.random32());
 }
 
 void Outbox::markDm(Slot& s, uint32_t now) {

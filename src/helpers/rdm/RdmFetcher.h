@@ -43,7 +43,6 @@ private:
 
   void trigger(uint32_t now);
   bool send(uint32_t now, bool is_retry);
-  uint32_t jittered(uint32_t interval);
 };
 
 }
