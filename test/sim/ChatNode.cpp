@@ -12,13 +12,13 @@ static constexpr uint32_t DIRECT_SEND_PERHOP_EXTRA_MILLIS = 250;
 
 static const char* CONTACTS_FILE = "/contacts";
 
-class ChatNode::Impl : public BaseChatMesh {
+class ChatNode::Impl : public DeterministicPeerData<BaseChatMesh> {
   ChatNode& _node;
 
 public:
   Impl(ChatNode& node, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc,
        mesh::PacketManager& mgr, mesh::MeshTables& tables)
-      : BaseChatMesh(radio, ms, rng, rtc, mgr, tables), _node(node) {}
+      : DeterministicPeerData<BaseChatMesh>(radio, ms, rng, rtc, mgr, tables), _node(node) {}
 
   using BaseChatMesh::sendFloodScoped;
 

@@ -350,9 +350,9 @@ mesh::Mesh* CompanionNode::createMesh() {
   _store.reset(new DataStore(_flash, rtc()));
 #ifdef WITH_RELIABLE_DM
   _rdm_io.reset(new SimFileIO(fs()));
-  _firmware = newFirmware<MyMesh>(radio(), rng(), rtc(), tables(), *_store, *_rdm_io);
+  _firmware = newFirmware<DeterministicPeerData<MyMesh>>(radio(), rng(), rtc(), tables(), *_store, *_rdm_io);
 #else
-  _firmware = new MyMesh(radio(), rng(), rtc(), tables(), *_store);
+  _firmware = new DeterministicPeerData<MyMesh>(radio(), rng(), rtc(), tables(), *_store);
 #endif
   return _firmware;
 }
