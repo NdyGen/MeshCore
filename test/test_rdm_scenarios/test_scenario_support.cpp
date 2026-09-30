@@ -1,12 +1,13 @@
-// The two instruments the scenarios rely on, checked against independent references: SubprocessBackend against
-// the real mbxd (line protocol of 06 par. 3.16, both directions) and the wire decoder against upstream traffic
-// whose ACK is known from BaseChatMesh.
+// The two instruments the scenarios rely on, checked against independent references: SubprocessBackend (the
+// firmware's SerialPiBackend over the pipes) against the real daemon (line protocol of 06 par. 3.16, both
+// directions) and the wire decoder against upstream traffic whose ACK is known from BaseChatMesh.
 
 #include <gtest/gtest.h>
 
 #include <ChatNode.h>
 #include <RdmScenario.h>
 #include <SubprocessBackend.h>
+#include <TestUtil.h>
 #include <helpers/rdm/RdmCrypto.h>
 
 #include <stdlib.h>
@@ -26,10 +27,6 @@ std::string tempDir() {
   return mkdtemp(buf.data()) ? std::string(buf.data()) : std::string();
 }
 
-void fill(uint8_t* p, size_t n, uint8_t seed) {
-  for (size_t i = 0; i < n; i++) p[i] = (uint8_t)(seed + i * 7);
-}
-
 struct MbxdFixture : ::testing::Test {
   uint32_t now = 1790640000;
   std::string mbxd = SubprocessBackend::locateMbxd();
@@ -39,11 +36,11 @@ struct MbxdFixture : ::testing::Test {
   uint8_t bob[32], owner4[4];
 
   void SetUp() override {
-    ASSERT_FALSE(mbxd.empty()) << "mbxd.py not found (set RDM_MBXD or run from the repo root)";
+    ASSERT_FALSE(mbxd.empty()) << SubprocessBackend::missingDaemon();
     ASSERT_FALSE(dir.empty());
-    fill(alice.pub, 32, 0x11);
-    fill(alice.k_owner, 16, 0x51);
-    fill(bob, 32, 0x77);
+    fillPattern(alice.pub, 32, 0x11);
+    fillPattern(alice.k_owner, 16, 0x51);
+    fillPattern(bob, 32, 0x77);
     memcpy(owner4, alice.pub, 4);
     be.reset(new SubprocessBackend(mbxd, dir + "/mbxd.db", [this] { return now; }));
     ASSERT_TRUE(be->ownerAdd(alice)) << be->lastError();
@@ -97,7 +94,7 @@ TEST_F(MbxdFixture, RegisterStoreFetchReportAndStatRoundTrip) {
   EXPECT_EQ(20, r.quota);
 
   uint8_t inner[100], hash[8];
-  fill(inner, sizeof(inner), 3);
+  fillPattern(inner, sizeof(inner), 3);
   rdm::crypto::txtPacketHash(hash, inner, sizeof(inner));
   ASSERT_TRUE(be->store(3, owner4, bob, hash, inner, sizeof(inner)));
   r = next();
@@ -117,7 +114,7 @@ TEST_F(MbxdFixture, RegisterStoreFetchReportAndStatRoundTrip) {
   rdm::Report rep;
   memcpy(rep.pkt_hash, hash, 8);
   rep.result = rdm::ReportResult::ON_RADIO;
-  fill(rep.ack, 6, 0xA0);
+  fillPattern(rep.ack, 6, 0xA0);
   ASSERT_TRUE(be->fetch(5, alice.pub, rdm::FETCH_FLAG_NO_PAYLOAD, 0xA1B2C3D4, &rep, 1));
   r = next();
   EXPECT_EQ(1, r.reports_ok);
@@ -131,7 +128,7 @@ TEST_F(MbxdFixture, RegisterStoreFetchReportAndStatRoundTrip) {
   EXPECT_EQ(0, memcmp(r.items[0].ack, rep.ack, 6));
 
   rep.result = rdm::ReportResult::SYNCED;
-  fill(rep.ack, 6, 0xC0);
+  fillPattern(rep.ack, 6, 0xC0);
   ASSERT_TRUE(be->fetch(7, alice.pub, 0, 0xA1B2C3D4, &rep, 1));
   next();
   ASSERT_TRUE(be->stat(8, bob, &hash, 1));
@@ -144,7 +141,7 @@ TEST_F(MbxdFixture, RegisterStoreFetchReportAndStatRoundTrip) {
 TEST_F(MbxdFixture, PiClockFollowsTheSimulationForExpiry) {
   uint8_t token[8], inner[40], hash[8];
   rdm::crypto::tokenB(token, alice.k_owner, bob);
-  fill(inner, sizeof(inner), 9);
+  fillPattern(inner, sizeof(inner), 9);
   rdm::crypto::txtPacketHash(hash, inner, sizeof(inner));
   ASSERT_TRUE(be->reg(1, bob, owner4, token));
   next();
@@ -162,7 +159,7 @@ TEST_F(MbxdFixture, PiClockFollowsTheSimulationForExpiry) {
 TEST_F(MbxdFixture, RestartKeepsMessagesAndAnswersHelloAgain) {
   uint8_t token[8], inner[40], hash[8];
   rdm::crypto::tokenB(token, alice.k_owner, bob);
-  fill(inner, sizeof(inner), 9);
+  fillPattern(inner, sizeof(inner), 9);
   rdm::crypto::txtPacketHash(hash, inner, sizeof(inner));
   ASSERT_TRUE(be->reg(1, bob, owner4, token));
   next();

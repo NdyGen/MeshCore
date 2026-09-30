@@ -8,6 +8,7 @@
 #include <helpers/rdm/RdmNode.h>
 
 #include <MemFileIO.h>
+#include <TestUtil.h>
 
 #include <deque>
 #include <functional>
@@ -46,7 +47,7 @@ public:
   std::vector<StatusPush> statuses;
   std::vector<uint32_t> confirms;
   int msg_waiting = 0;
-  uint32_t rnd = 1;
+  Lcg32 rnd{1, 1103515245u, 12345u};
   // mailbox role (answers FETCH/DEPOSIT itself instead of running a Node)
   std::function<void(Peer& self, const Msg& m)> on_req;
 
@@ -58,7 +59,7 @@ public:
 
   uint32_t millis() override;
   uint32_t rtcNow(bool& trusted) override;
-  uint32_t random32() override { rnd = rnd * 1103515245u + 12345u; return rnd; }
+  uint32_t random32() override { return rnd.next(); }
   bool txIdle() override { return true; }
   void selfPub(uint8_t out[32]) override { memcpy(out, pub, 32); }
   bool lookupContact(const uint8_t prefix[6], uint8_t pub_out[32], bool& fav, bool& has_path) override;

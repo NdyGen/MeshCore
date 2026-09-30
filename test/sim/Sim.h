@@ -59,9 +59,18 @@ struct FsWrite {
 
 // Return true to drop this transmission for receiver `to_index` (counted as a loss).
 using DropFilter = std::function<bool(const TxRecord& tx, int to_index)>;
+// Called once per transmission, right after its TxRecord is in tx_log() and before any receiver has it.
+using TxHook = std::function<void(const TxRecord& tx)>;
 
 class Simulator;
 class SimNode;
+
+// mesh::Mesh (and Dispatcher) have no virtual destructor, so a node deletes its mesh as the type createMesh() made.
+using MeshPtr = std::unique_ptr<mesh::Mesh, void (*)(mesh::Mesh*)>;
+template <class T>
+MeshPtr ownMesh(T* m) {
+  return MeshPtr(m, [](mesh::Mesh* p) { delete static_cast<T*>(p); });
+}
 
 class SimRNG : public mesh::RNG {
   uint64_t _state = 0;
@@ -149,7 +158,7 @@ class SimNode {
   std::unique_ptr<SimRadio> _radio;
   std::unique_ptr<StaticPoolPacketManager> _mgr;
   std::unique_ptr<SimpleMeshTables> _tables;
-  std::unique_ptr<mesh::Mesh> _mesh;
+  MeshPtr _mesh{nullptr, [](mesh::Mesh*) {}};
   mesh::LocalIdentity _identity;
 
   void boot();
@@ -164,7 +173,7 @@ protected:
   SimNode(Simulator& sim, std::string name, int index);
 
   // Construct the node's mesh on top of radio()/millis()/rng()/rtc()/packetManager()/tables(). Called on every boot.
-  virtual mesh::Mesh* createMesh() = 0;
+  virtual MeshPtr createMesh() = 0;
   // Mesh::begin() is not virtual; firmwares with their own begin() (companion MyMesh) override this.
   virtual void beginMesh() { _mesh->begin(); }
   virtual void onBoot() {}
@@ -189,6 +198,7 @@ public:
   SimNode& operator=(const SimNode&) = delete;
 
   Simulator& sim() { return _sim; }
+  const Simulator& sim() const { return _sim; }
   const std::string& name() const { return _name; }
   int index() const { return _index; }
   bool powered() const { return _powered; }
@@ -234,11 +244,11 @@ class Simulator {
     uint32_t to_power_epoch;
   };
 
+  static constexpr uint32_t TICK_MS = 1;
+
   uint64_t _seed;
   uint64_t _now = 0;
-  uint32_t _tick = 1;
   uint32_t _start_epoch = DEFAULT_START_EPOCH;
-  bool _collisions = true;
   bool _trace = false;
   SimRNG _rng;
   std::vector<std::unique_ptr<SimNode>> _nodes;
@@ -248,11 +258,10 @@ class Simulator {
   std::vector<FsWrite> _fs_log;
   uint64_t _event_seq = 0;
   SimNode* _current = nullptr;
-  uint64_t _dropped_collision = 0, _dropped_loss = 0, _dropped_halfduplex = 0, _dropped_off = 0, _dropped_filter = 0;
+  uint64_t _dropped_collision = 0, _dropped_loss = 0, _dropped_off = 0, _dropped_filter = 0;
   std::vector<DropFilter> _drop_filters;
+  std::vector<TxHook> _tx_hooks;
   uint32_t _ff_max_step = 0;
-  uint32_t _ff_settle = 40000;
-  uint64_t _last_activity = 0;
 
   bool idle() const;
   uint64_t nextStep() const;
@@ -284,19 +293,16 @@ public:
   void unlink(SimNode& a, SimNode& b);
   bool linked(const SimNode& from, const SimNode& to) const;
 
-  void set_collisions(bool enabled) { _collisions = enabled; }
-  void set_tick(uint32_t ms) { _tick = ms ? ms : 1; }
-  void set_trace(bool enabled) { _trace = enabled; }
-  // Fast-forward: when the air is quiet for `settle_ms`, no node is busy() and no frame is pending, advance time
-  // in steps of up to `max_step_ms` (bounded by every node's nextWakeupMs()). 0 disables (default: 1 ms ticks).
-  // settle_ms covers delays the sim cannot see (flood rx delay up to 32 s, retransmit jitter).
-  void set_fast_forward(uint32_t max_step_ms, uint32_t settle_ms = 40000) { _ff_max_step = max_step_ms; _ff_settle = settle_ms; }
+  // Fast-forward: when nothing is on air, no node is busy() and no frame is pending, advance time in steps of up
+  // to `max_step_ms` (bounded by every node's nextWakeupMs()). 0 disables (default: 1 ms ticks). Delays inside a
+  // mesh (flood rx delay, retransmit jitter) hold a packet of its pool, which busy() reports.
+  void set_fast_forward(uint32_t max_step_ms) { _ff_max_step = max_step_ms; }
 
   // Targeted loss (e.g. "lose the next ACK from alice"): every filter is asked per transmission and receiver.
   void add_drop_filter(DropFilter f) { _drop_filters.push_back(std::move(f)); }
-  void clear_drop_filters() { _drop_filters.clear(); }
   // Drops the next `count` transmissions of `payload_type` (from/to -1 = any), then stops dropping.
   void drop_next(uint8_t payload_type, int from_index = -1, int to_index = -1, int count = 1);
+  void add_tx_hook(TxHook f) { _tx_hooks.push_back(std::move(f)); }
 
   void run_for(uint64_t ms);
   // Runs until pred() is true (checked every tick) or timeout; returns pred().
@@ -318,6 +324,9 @@ public:
 
   size_t node_count() const { return _nodes.size(); }
   SimNode& node(size_t i) { return *_nodes.at(i); }
+  // The node whose public key starts with these `len` bytes; -1 / nullptr if none.
+  int indexOfPrefix(const uint8_t* prefix, size_t len) const;
+  SimNode* nodeByPrefix(const uint8_t* prefix, size_t len);
   SimRNG& rng() { return _rng; }
   const std::vector<TxRecord>& tx_log() const { return _tx_log; }
   const std::vector<FsWrite>& fs_log() const { return _fs_log; }
@@ -326,7 +335,6 @@ public:
 
   uint64_t dropped_collision() const { return _dropped_collision; }
   uint64_t dropped_loss() const { return _dropped_loss; }
-  uint64_t dropped_halfduplex() const { return _dropped_halfduplex; }
   uint64_t dropped_off() const { return _dropped_off; }
   uint64_t dropped_filter() const { return _dropped_filter; }
 };
@@ -336,10 +344,18 @@ public:
 // stack of Mesh::onRecvPacket() and ends up in the ACK; on real hardware it is whatever the stack held. The
 // simulator pins it to 0 so two runs with one seed give identical bytes. The buffer is MAX_PACKET_PAYLOAD long
 // and upstream itself writes data[len].
+// The mixin also lets the simulator see the mesh's packet pool: a held packet (delayed inbound, queued outbound)
+// means work the mesh will do at a time the simulator cannot know, so fast-forward must tick through it.
 template <class M>
 class DeterministicPeerData : public M {
 public:
-  using M::M;
+  template <class... Args>
+  explicit DeterministicPeerData(Args&&... args) : M(std::forward<Args>(args)...), _pool_size(this->_mgr->getFreeCount()) {}
+
+  bool holdsPackets() const { return this->_mgr->getFreeCount() < _pool_size; }
+
+private:
+  int _pool_size;
 
 protected:
   void onPeerDataRecv(mesh::Packet* packet, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data,

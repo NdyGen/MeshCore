@@ -1,12 +1,13 @@
 #include "RdmScenario.h"
 
+#include <FS.h>
 #include <Packet.h>
 #include <Utils.h>
+#include <helpers/rdm/RdmBytes.h>
 #include <helpers/rdm/RdmCodec.h>
 #include <helpers/rdm/RdmCrypto.h>
 #include <helpers/rdm/RdmStorage.h>
-
-#include "SimFileIO.h"
+#include <helpers/rdm/arduino/ArduinoFileIO.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -117,8 +118,6 @@ Kind WireLog::classifyResponse(uint32_t tag, int requester, int responder) const
   return Kind::RESP_OTHER;
 }
 
-static uint32_t le32(const uint8_t* p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
-
 void WireLog::classifyPlain(Wire& w, const std::vector<uint8_t>& plain) {
   switch (w.type) {
     case PAYLOAD_TYPE_TXT_MSG: {
@@ -136,7 +135,7 @@ void WireLog::classifyPlain(Wire& w, const std::vector<uint8_t>& plain) {
     }
     case PAYLOAD_TYPE_REQ: {
       if (plain.size() < 5) return;
-      w.ts = le32(plain.data());
+      w.ts = rdm::get32(plain.data());
       w.body.assign(plain.begin() + 4, plain.end());
       switch (plain[4]) {
         case rdm::REQ_DEPOSIT: w.kind = Kind::DEPOSIT; break;
@@ -150,7 +149,7 @@ void WireLog::classifyPlain(Wire& w, const std::vector<uint8_t>& plain) {
     }
     case PAYLOAD_TYPE_RESPONSE: {
       if (plain.size() < 4) return;
-      w.ts = le32(plain.data());
+      w.ts = rdm::get32(plain.data());
       w.body.assign(plain.begin() + 4, plain.end());
       w.kind = classifyResponse(w.ts, w.dest, w.origin);
       return;
@@ -166,7 +165,7 @@ void WireLog::classifyPlain(Wire& w, const std::vector<uint8_t>& plain) {
         w.inner = Kind::ACK;
         w.ack.assign(plain.begin() + k, plain.begin() + std::min(plain.size(), k + 7));
       } else if (extra_type == PAYLOAD_TYPE_RESPONSE && plain.size() >= k + 4) {
-        w.ts = le32(&plain[k]);
+        w.ts = rdm::get32(&plain[k]);
         w.body.assign(plain.begin() + k + 4, plain.end());
         w.inner = classifyResponse(w.ts, w.dest, w.origin);
       }
@@ -221,7 +220,7 @@ Wire WireLog::decode(const TxRecord& tx) {
         w.dest = d->index();
         w.body.assign(buf, buf + n);
         if (n >= 6) {
-          w.ts = le32(buf);
+          w.ts = rdm::get32(buf);
           w.kind = buf[4] == rdm::REG_MARKER0 && buf[5] == rdm::REG_MARKER1 ? Kind::REG : Kind::REQ_OTHER;
           _reqs.push_back({ w.ts, w.origin, w.dest, w.kind });
         }
@@ -301,17 +300,6 @@ std::string WireLog::dump(uint64_t from_ms, uint64_t to_ms) {
 
 // ---- hooks and helpers ----------------------------------------------------------------------------------
 
-void onTransmit(Simulator& sim, std::function<void(const TxRecord&)> fn) {
-  auto last = std::make_shared<int64_t>(-1);
-  sim.add_drop_filter([last, fn](const TxRecord& tx, int) {
-    if ((int64_t)tx.seq != *last) {
-      *last = (int64_t)tx.seq;
-      fn(tx);
-    }
-    return false;
-  });
-}
-
 uint32_t expectAckR(uint32_t ts, uint8_t attempt, const std::string& text, const uint8_t sender_pub[32]) {
   uint8_t a[4];
   rdm::crypto::ackR(a, ts, (uint8_t)(attempt & 3), text.data(), text.size(), sender_pub);
@@ -324,12 +312,6 @@ std::vector<uint8_t> expectAckS(uint32_t ts, const std::string& text, const uint
   std::vector<uint8_t> a(6);
   rdm::crypto::ackS(a.data(), ts, 0, text.data(), text.size(), sender_pub);
   return a;
-}
-
-std::vector<uint8_t> expectKey(uint32_t ts, const std::string& text, const uint8_t sender_pub[32]) {
-  std::vector<uint8_t> k(4);
-  rdm::crypto::key(k.data(), ts, text.data(), text.size(), sender_pub);
-  return k;
 }
 
 uint32_t ackValue(const std::vector<uint8_t>& ack) {
@@ -348,9 +330,11 @@ RecordDump readRecords(const SimFS& fs, const char* path) {
   d.payload_size = (uint16_t)(h[6] | h[7] << 8);
   d.slots = (uint16_t)(h[8] | h[9] << 8);
 
-  SimFS copy = fs;
-  copy.write_budget = -1;
-  SimFileIO io(copy);
+  // RecordFile::open may repair, so it works on a scratch copy of just this file
+  SimFS scratch;
+  scratch.files[path] = it->second;
+  fs::BoundFS flash(scratch);
+  rdm::ArduinoFileIO io(flash);
   rdm::RecordFile f(io, path, ver, d.payload_size, d.slots, ab);
   if (f.open() != rdm::RecordFile::Open::OPENED) return d;
   std::vector<uint8_t> buf(d.payload_size);
@@ -367,7 +351,7 @@ bool readContactRdm(const SimFS& fs, const uint8_t pub_prefix[6], ContactRdmView
   for (const auto& r : d.records) {
     if (memcmp(r.data(), pub_prefix, 6) != 0) continue;
     out.flags = r[6];
-    out.watermark = le32(&r[8]);
+    out.watermark = rdm::get32(&r[8]);
     memcpy(out.mbx_pub, &r[12], 32);
     memcpy(out.token, &r[44], 8);
     return true;

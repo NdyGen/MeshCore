@@ -4,21 +4,13 @@
 
 namespace sim {
 
-// Same constants as examples/companion_radio/MyMesh.cpp, so est_timeout matches what the app receives.
-static constexpr uint32_t SEND_TIMEOUT_BASE_MILLIS = 500;
-static constexpr float FLOOD_SEND_TIMEOUT_FACTOR = 16.0f;
-static constexpr float DIRECT_SEND_PERHOP_FACTOR = 6.0f;
-static constexpr uint32_t DIRECT_SEND_PERHOP_EXTRA_MILLIS = 250;
-
-static const char* CONTACTS_FILE = "/contacts";
-
-class ChatNode::Impl : public DeterministicPeerData<BaseChatMesh> {
+class ChatNode::Impl : public SimChatMeshBase {
   ChatNode& _node;
 
 public:
   Impl(ChatNode& node, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc,
        mesh::PacketManager& mgr, mesh::MeshTables& tables)
-      : DeterministicPeerData<BaseChatMesh>(radio, ms, rng, rtc, mgr, tables), _node(node) {}
+      : SimChatMeshBase(radio, ms, rng, rtc, mgr, tables), _node(node) {}
 
   using BaseChatMesh::sendFloodScoped;
 
@@ -52,23 +44,10 @@ protected:
     record(from, pkt, ts, TXT_TYPE_SIGNED_PLAIN, text);
   }
 
-  uint32_t calcFloodTimeoutMillisFor(uint32_t airtime) const override {
-    return SEND_TIMEOUT_BASE_MILLIS + (FLOOD_SEND_TIMEOUT_FACTOR * airtime);
-  }
-  uint32_t calcDirectTimeoutMillisFor(uint32_t airtime, uint8_t path_len) const override {
-    uint8_t hops = path_len & 63;
-    return SEND_TIMEOUT_BASE_MILLIS + ((airtime * DIRECT_SEND_PERHOP_FACTOR + DIRECT_SEND_PERHOP_EXTRA_MILLIS) * (hops + 1));
-  }
-  void onSendTimeout() override {}  // companion does nothing here either; timeouts are tracked per message in onLoop()
-
-  void onChannelMessageRecv(const mesh::GroupChannel&, mesh::Packet*, uint32_t, const char*) override {}
-  uint8_t onContactRequest(const ContactInfo&, uint32_t, const uint8_t*, uint8_t, uint8_t*) override { return 0; }
-  void onContactResponse(const ContactInfo&, const uint8_t*, uint8_t) override {}
-
 private:
   void record(const ContactInfo& from, mesh::Packet* pkt, uint32_t ts, uint8_t type, const char* text) {
     RxMsg m;
-    m.from_index = _node.indexForPubKey(from.id.pub_key);
+    m.from_index = _node.sim().indexOfPrefix(from.id.pub_key, PUB_KEY_SIZE);
     m.text = text;
     m.sender_timestamp = ts;
     m.txt_type = type;
@@ -83,12 +62,12 @@ ChatNode::ChatNode(Simulator& sim, std::string name, int index) : SimNode(sim, s
 
 ChatNode::~ChatNode() = default;
 
-mesh::Mesh* ChatNode::createMesh() {
+MeshPtr ChatNode::createMesh() {
   _impl = new Impl(*this, radio(), millisClock(), rng(), rtc(), packetManager(), tables());
-  return _impl;
+  return ownMesh(_impl);
 }
 
-void ChatNode::onBoot() { loadContacts(); }
+void ChatNode::onBoot() { SimContacts::load(chat(), fs()); }
 
 void ChatNode::loopMesh() { _impl->loop(); }
 
@@ -102,28 +81,11 @@ void ChatNode::onLoop() {
       m.timed_out_before_ack = true;
     }
   }
-
-  for (auto& job : _retries) {
-    if (job.done) continue;
-    const SentMsg& last = _sent.at(job.attempts.back());
-    if (last.status == Status::DELIVERED) {
-      job.done = true;
-    } else if (last.status == Status::TIMED_OUT || last.status == Status::SEND_FAILED) {
-      int n = (int)job.attempts.size();
-      if (n >= job.policy.max_attempts) {
-        job.done = true;
-        continue;
-      }
-      SimNode& to = sim().node(job.to_index);
-      if (job.policy.flood_on_last && n == job.policy.max_attempts - 1) reset_path(to);
-      int id = send_text(to, job.text, (uint8_t)n, job.timestamp);
-      if (id < 0) {
-        job.done = true;
-      } else {
-        job.attempts.push_back(id);
-      }
-    }
-  }
+  _retries.tick([this](int id) { return _sent.at(id).status; },
+                [this](int to) { reset_path(sim().node(to)); },
+                [this](int to, const std::string& text, uint8_t attempt, uint32_t ts) {
+                  return send_text(sim().node(to), text, attempt, ts);
+                });
 }
 
 uint64_t ChatNode::nextWakeupMs() const {
@@ -205,25 +167,11 @@ int ChatNode::send_text(const SimNode& to, const std::string& text, uint8_t atte
 int ChatNode::send_text_with_retries(const SimNode& to, const std::string& text, AppRetry policy) {
   int first = send_text(to, text, 0);
   if (first < 0) return -1;
-  RetryJob job{to.index(), text, _sent[first].timestamp, policy, {first}, false};
-  _retries.push_back(job);
-  return (int)_retries.size() - 1;
+  return _retries.add(to.index(), text, _sent[first].timestamp, policy, first);
 }
 
 ChatNode::Status ChatNode::retry_status(int retry_id) const {
-  const RetryJob& job = _retries.at(retry_id);
-  for (int id : job.attempts) {
-    if (_sent[id].status == Status::DELIVERED) return Status::DELIVERED;
-  }
-  return _sent[job.attempts.back()].status;
-}
-
-bool ChatNode::retry_done(int retry_id) const { return _retries.at(retry_id).done; }
-
-size_t ChatNode::inbox_count(const std::string& text) const {
-  size_t n = 0;
-  for (const auto& m : _inbox) n += m.text == text;
-  return n;
+  return _retries.status(retry_id, [this](int id) { return _sent.at(id).status; });
 }
 
 void ChatNode::markAcked(uint32_t ack) {
@@ -235,36 +183,7 @@ void ChatNode::markAcked(uint32_t ack) {
   }
 }
 
-int ChatNode::indexForPubKey(const uint8_t* pub_key) const {
-  Simulator& s = const_cast<ChatNode*>(this)->sim();
-  for (size_t i = 0; i < s.node_count(); i++) {
-    if (memcmp(s.node(i).identity().pub_key, pub_key, PUB_KEY_SIZE) == 0) return (int)i;
-  }
-  return -1;
-}
-
-// Flash layout: consecutive raw ContactInfo records (the shared-secret cache is recomputed on load).
-void ChatNode::saveContacts() {
-  std::vector<uint8_t> blob;
-  ContactInfo c;
-  for (int i = 0; i < chat().getTotalContactSlots(); i++) {
-    if (!chat().getContactByIdx(i, c) || c.type == ADV_TYPE_NONE) continue;
-    const uint8_t* p = reinterpret_cast<const uint8_t*>(&c);
-    blob.insert(blob.end(), p, p + sizeof(c));
-  }
-  fs().files[CONTACTS_FILE] = blob;
-}
-
-void ChatNode::loadContacts() {
-  auto it = fs().files.find(CONTACTS_FILE);
-  if (it == fs().files.end()) return;
-  const std::vector<uint8_t>& blob = it->second;
-  for (size_t off = 0; off + sizeof(ContactInfo) <= blob.size(); off += sizeof(ContactInfo)) {
-    ContactInfo c;
-    memcpy(reinterpret_cast<uint8_t*>(&c), &blob[off], sizeof(c));
-    chat().addContact(c);
-  }
-}
+void ChatNode::saveContacts() { SimContacts::save(chat(), fs()); }
 
 // ---------------------------------------------------------------- RepeaterNode
 
@@ -280,8 +199,8 @@ protected:
 };
 }
 
-mesh::Mesh* RepeaterNode::createMesh() {
-  return new RepeaterMesh(radio(), millisClock(), rng(), rtc(), packetManager(), tables());
+MeshPtr RepeaterNode::createMesh() {
+  return ownMesh(new RepeaterMesh(radio(), millisClock(), rng(), rtc(), packetManager(), tables()));
 }
 
 void RepeaterNode::advert() {

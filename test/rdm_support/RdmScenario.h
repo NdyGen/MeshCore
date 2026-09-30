@@ -2,8 +2,8 @@
 
 // Assertion toolkit for the RDM scenario tests (06 par. 6.2): decodes every transmission of a simulation with the
 // nodes' own keys, so a scenario can assert on what went over the air (RECEIPT_QUERY at +1 h, FETCH flood then
-// PATH, ACK_R bytes equal to upstream) instead of on internal state. Also: a hook on the moment of transmission,
-// read access to RDM record files in a node's flash, and the 20% airtime norm.
+// PATH, ACK_R bytes equal to upstream) instead of on internal state. Also: read access to RDM record files in a
+// node's flash, and the 20% airtime norm.
 
 #include <Sim.h>
 #include <SimFS.h>
@@ -89,14 +89,9 @@ private:
   void classifyPlain(Wire& w, const std::vector<uint8_t>& plain);
 };
 
-// Calls fn(tx) once per transmission, at the moment it goes on air (before any receiver has it). Implemented as a
-// drop filter that never drops, so register it before drop_next()/add_drop_filter() filters that may drop.
-void onTransmit(Simulator& sim, std::function<void(const TxRecord&)> fn);
-
 // Upstream and RDM proofs of a plain DM, for comparing with what went over the air.
 uint32_t expectAckR(uint32_t ts, uint8_t attempt, const std::string& text, const uint8_t sender_pub[32]);
 std::vector<uint8_t> expectAckS(uint32_t ts, const std::string& text, const uint8_t sender_pub[32]);
-std::vector<uint8_t> expectKey(uint32_t ts, const std::string& text, const uint8_t sender_pub[32]);
 uint32_t ackValue(const std::vector<uint8_t>& ack);   // first 4 bytes, little-endian like the firmware's uint32_t
 
 // RDM record files (rdm::RecordFile format) in a node's flash, read from a copy so the node is not disturbed.

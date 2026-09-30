@@ -237,12 +237,8 @@ TEST(RdmScenario, S02_AliceTelefoonWeg_AckSVerloren) {
 
 // 05 scenario 3: Alice's radio off from before the send, on after 5 h. The standard app's retries land on the one
 // outbox entry; the outbox probes every 30 min; the first probe after power-on reads UNKNOWN and the DM follows.
-namespace {
-
-void runS03(CompanionModel model) {
-  WorldOptions o;
-  o.model = model;
-  World w(o);
+TEST(RdmScenario, S03_AliceRadioUit) {
+  World w{WorldOptions()};
   w.powerOff(*w.alice);
   const std::string text = textOf(120, "S03");
   const uint64_t t0 = w.s.now();
@@ -302,11 +298,6 @@ void runS03(CompanionModel model) {
   EXPECT_EQ(1u, w.bobApp().confirmCount(id)) << "late SEND_CONFIRMED";
 }
 
-}
-
-TEST(RdmScenario, S03_AliceRadioUit) { runS03(CompanionModel::SIM); }
-TEST(RdmScenario, S03_AliceRadioUit_CompanionNode) { runS03(CompanionModel::FIRMWARE); }
-
 namespace {
 
 // 05 scenario 4 up to Bob's return: ON_RADIO, Bob off, Alice syncs (her only ACK_S is lost), fill(), Bob on.
@@ -315,7 +306,10 @@ void runS04(World& w, const std::function<void()>& while_bob_off, rdm::QueryStat
   const std::string text = textOf(140, "S04");
   int id = w.bobSends(text);
   ASSERT_TRUE(w.runUntil([&] { return w.bobApp().hasStatus(id, UserStatus::ON_RADIO); }, 2 * MIN));
-  w.runFor(MIN);
+  // Bob stays on until his RDM clock has been persisted with the phone's time (RdmClock: every RDM_CLOCK_PERSIST_S).
+  // Rebooted earlier, his RDM time restarts near 0, and the CMD_SET_DEVICE_TIME of the reconnect below would let it
+  // jump past final_at + RDM_FINAL_KEEP_S: the outbox then frees the unreported DELIVERED before the 0x91 replay.
+  w.runFor(RDM_CLOCK_PERSIST_S * SEC + MIN);
   const uint64_t t_off = w.s.now();
   const size_t pushes = w.bobApp().statusLog().size();
   w.powerOff(*w.bob);
@@ -341,7 +335,7 @@ void runS04(World& w, const std::function<void()>& while_bob_off, rdm::QueryStat
   rdm::QueryReply a = queryAnswer(r);
   EXPECT_EQ(expect_answer, a.state);
   if (expect_answer == rdm::QueryState::SYNCED) EXPECT_TRUE(std::equal(ack_s.begin(), ack_s.end(), a.ack));
-  EXPECT_EQ((int)rdm::OutState::DELIVERED, w.outState(w.bobCtl(), *w.alice, w.bobApp().sent(id).ts));
+  EXPECT_EQ((int)rdm::OutState::DELIVERED, outState(*w.bob, *w.alice, w.bobApp().sent(id).ts));
   EXPECT_EQ(pushes, w.bobApp().statusLog().size()) << "no 0x91 without a connected RDM client";
 
   const uint64_t t_conn = w.s.now();
@@ -360,13 +354,6 @@ TEST(RdmScenario, S04_BobWegVoorAckS) {
   runS04(w, [] {}, rdm::QueryState::SYNCED);
 }
 
-TEST(RdmScenario, S04_BobWegVoorAckS_CompanionNode) {
-  WorldOptions o;
-  o.model = CompanionModel::FIRMWARE;
-  World w(o);
-  runS04(w, [] {}, rdm::QueryState::SYNCED);
-}
-
 // Variant: Alice's register fills up while Bob is away (synced entries evicted, watermark set): EVICTED in ON_RADIO
 // also means DELIVERED. A third fork companion fills the register; Alice's flash leaves RDM few register slots.
 TEST(RdmScenario, S04_BobWegVoorAckS_GevuldRegister) {
@@ -377,25 +364,25 @@ TEST(RdmScenario, S04_BobWegVoorAckS_GevuldRegister) {
   ASSERT_TRUE(reg.ok);
   ASSERT_LT(reg.slots, 64) << "register should be small for this variant";
 
-  auto& carol = w.s.add<RdmSimCompanion>("carol");
+  auto& carol = w.s.add<CompanionNode>("carol");
   w.s.link(carol, *w.rep);
   w.wires.addNode(carol);
   runS04(w, [&] {
-    carol.connect(true);
-    carol.advert();
+    carol.app().connect();
+    ASSERT_TRUE(enableRdm(carol));
+    carol.app().advert(true);
     w.runFor(5 * SEC);
-    w.aliceCtl().advert();
+    w.alice->app().advert(true);
     w.runFor(5 * SEC);
-    carol.add_contact(*w.alice, true);
-    w.aliceCtl().addContact(carol, true);
+    addContact(carol, *w.alice, true);
+    addContact(*w.alice, carol, true);
     w.runFor(SEC);
     for (int i = 0; i < reg.slots + 2; i++) {
-      int c = carol.send_text(*w.alice, "fill " + std::to_string(i));
+      int c = carol.app().send_text(*w.alice, "fill " + std::to_string(i));
       ASSERT_GE(c, 0);
-      uint32_t ack = carol.sent(c).app_ack;
       ASSERT_TRUE(w.runUntil([&] {
-        for (auto st : carol.statuses_for(ack)) if (st == UserStatus::DELIVERED) return true;
-        return false;
+        const CompanionApp::Sent& m = carol.app().sent(c);
+        return m.answered && hasStatus(carol.app(), m.expected_ack, UserStatus::DELIVERED);
       }, 10 * MIN)) << "filler " << i << "\n" << w.wires.dump(w.s.now() - 10 * MIN);   // G16 recovers lost ACKs
     }
   }, rdm::QueryState::EVICTED);
@@ -439,7 +426,7 @@ TEST(RdmScenario, S05_NooitTegelijk) {
   EXPECT_GE(fw[0].t_ms, t0 + DAY - 2 * MIN) << "G15: a whole DM at 24 h despite the known cap";
   EXPECT_LE(fw[0].t_ms, t0 + DAY + 5 * MIN);
   w.runFor(MIN);
-  EXPECT_EQ(-1, w.outState(w.bobCtl(), *w.alice, w.bobApp().sent(id).ts)) << "reported final state frees the slot (G2)";
+  EXPECT_EQ(-1, outState(*w.bob, *w.alice, w.bobApp().sent(id).ts)) << "reported final state frees the slot (G2)";
 }
 
 // Variant: EXPIRED while no 0x91 client is connected: the slot stays 24 h after EXPIRED (G2, D3).
@@ -453,11 +440,11 @@ TEST(RdmScenario, S05_NooitTegelijk_SlotNaVierentwintigUur) {
   w.runFor(SEC);
   w.bobApp().disconnect();
   w.runFor(t0 + 7 * DAY + MIN - w.s.now());
-  EXPECT_EQ((int)rdm::OutState::EXPIRED, w.outState(w.bobCtl(), *w.alice, ts));
+  EXPECT_EQ((int)rdm::OutState::EXPIRED, outState(*w.bob, *w.alice, ts));
   w.runFor(t0 + 8 * DAY - 2 * MIN - w.s.now());
-  EXPECT_EQ((int)rdm::OutState::EXPIRED, w.outState(w.bobCtl(), *w.alice, ts));
+  EXPECT_EQ((int)rdm::OutState::EXPIRED, outState(*w.bob, *w.alice, ts));
   w.runFor(4 * MIN);
-  EXPECT_EQ(-1, w.outState(w.bobCtl(), *w.alice, ts)) << "slot free 24 h after EXPIRED";
+  EXPECT_EQ(-1, outState(*w.bob, *w.alice, ts)) << "slot free 24 h after EXPIRED";
 }
 
 // 05 scenario 6: Alice's inbox and register are recreated after ACK_R, before the app synced. The query reads
@@ -559,9 +546,8 @@ uint64_t mailboxMessageAirtime(World& w, uint64_t from, uint64_t to) {
 }
 
 // 05 scenario 7. Alice's radio off at the send, Bob off once in custody, Alice on (FETCH), her app later, Bob on.
-void runS07(Layout layout, bool real_mbxd, CompanionModel model = CompanionModel::SIM) {
+void runS07(Layout layout, bool real_mbxd) {
   WorldOptions o;
-  o.model = model;
   o.layout = layout;
   o.mailboxes = 1;
   o.real_mbxd = real_mbxd;
@@ -573,7 +559,7 @@ void runS07(Layout layout, bool real_mbxd, CompanionModel model = CompanionModel
 
   // M answers STORED only after the Pi committed: mbx.store (code 00) is there when M transmits the answer.
   int stored_answers = 0, stored_committed = 0;
-  onTransmit(w.s, [&](const TxRecord& tx) {
+  w.s.add_tx_hook([&](const TxRecord& tx) {
     if (tx.from != m.index()) return;
     const Wire& x = w.wires.all().back();
     if (x.effective() != Kind::DEPOSIT_RESP || depositCode(x) != rdm::MbxCode::OK) return;
@@ -633,7 +619,7 @@ void runS07(Layout layout, bool real_mbxd, CompanionModel model = CompanionModel
   w.powerOn(*w.alice);
   // K3 (03 par. 3): M lives in the hidden peer table, not in contacts[]; a mailbox contact would show in the app,
   // take a contact slot and keep M's path over reboots (then the boot FETCH below would not need the flood).
-  EXPECT_FALSE(w.aliceCtl().isContact(m)) << "K3: Alice's mailbox is in her contacts (its advert was auto-added)";
+  EXPECT_FALSE(isContact(*w.alice, m)) << "K3: Alice's mailbox is in her contacts (its advert was auto-added)";
   w.runFor(2 * HOUR);
 
   // FETCH via flood -> PATH without copy -> FETCH direct with the copy -> FETCH with report ON_RADIO
@@ -704,10 +690,8 @@ TEST(RdmScenario, S07_Mailbox) {
   }
 }
 
-TEST(RdmScenario, S07_Mailbox_CompanionNode) { runS07(Layout::VIA_REPEATER, false, CompanionModel::FIRMWARE); }
-
 TEST(RdmScenario, S07_MailboxEchteMbxd) {
-  ASSERT_FALSE(SubprocessBackend::locateMbxd().empty()) << "mbxd.py not found (set RDM_MBXD or run from the repo root)";
+  ASSERT_FALSE(SubprocessBackend::locateMbxd().empty()) << SubprocessBackend::missingDaemon();
   runS07(Layout::VIA_REPEATER, true);
 }
 
@@ -895,7 +879,7 @@ TEST(RdmScenario, S10_AliceStandaard_Backoff) {
   int hello = w.bobSends("hello stock alice");
   ASSERT_TRUE(w.runUntil([&] { return w.bobApp().hasStatus(hello, UserStatus::ON_RADIO_FINAL); }, 2 * MIN));
   w.runFor(MIN);
-  ASSERT_TRUE(w.bobCtl().hasPathTo(*w.alice));
+  ASSERT_TRUE(hasPathTo(*w.bob, *w.alice));
   w.powerOff(*w.alice);
   const std::string text = textOf(120, "S10b");
   const uint64_t t0 = w.s.now();
@@ -934,7 +918,8 @@ TEST(RdmScenario, S11_CapIngetrokken) {
   ASSERT_TRUE(w.runUntil([&] { return w.bobApp().hasStatus(id, UserStatus::ON_RADIO_FINAL); }, DAY)) << w.trace(id);
 
   EXPECT_GE(w.wires.sent(*w.bob, Kind::QUERY, t_up).size(), 1u) << "probes while the cap is known";
-  EXPECT_TRUE(w.wires.select([&](const Wire& x) { return x.origin == w.alice->index() && x.kind == Kind::QUERY_RESP; }).empty())
+  // from this DM on: the warm-up may already have needed a query (ACK_S lost at R), answered by the fork Alice
+  EXPECT_TRUE(w.wires.select([&](const Wire& x) { return x.origin == w.alice->index() && x.kind == Kind::QUERY_RESP && x.t_ms >= t0; }).empty())
       << "stock firmware does not answer RECEIPT_QUERY";
   auto fw = w.wires.select([&](const Wire& x) { return x.original() && x.origin == w.bob->index() && isFirmwareDm(x) && x.t_ms > t_up; });
   ASSERT_GE(fw.size(), 1u);
@@ -1030,11 +1015,8 @@ TEST(RdmScenario, S12_MailboxWissel) {
 
 // Beslissing 6, I8: the standard app never sends CMD_RDM_ENABLE and gets no 0x91, only SEND_CONFIRMED at ON_RADIO,
 // also when it connects only after ON_RADIO (G5).
-namespace {
-
-void runS13(CompanionModel model) {
+TEST(RdmScenario, S13_StandaardApp) {
   WorldOptions o;
-  o.model = model;
   o.bob_rdm_client = false;
   World w(o);
   const std::string text = textOf(120, "S13");
@@ -1052,7 +1034,7 @@ void runS13(CompanionModel model) {
 
   int id2 = w.bobSends(textOf(120, "S13b"));
   w.bobApp().disconnect();
-  ASSERT_TRUE(w.runUntil([&] { return w.outState(w.bobCtl(), *w.alice, w.bobApp().sent(id2).ts) >= (int)rdm::OutState::ON_RADIO; }, 2 * MIN));
+  ASSERT_TRUE(w.runUntil([&] { return outState(*w.bob, *w.alice, w.bobApp().sent(id2).ts) >= (int)rdm::OutState::ON_RADIO; }, 2 * MIN));
   EXPECT_EQ(0u, w.bobApp().confirmCount(id2));
   w.bobApp().connect();
   w.runFor(10 * SEC);
@@ -1063,11 +1045,6 @@ void runS13(CompanionModel model) {
   EXPECT_EQ(1u, w.bobApp().confirmCount(id2)) << "once";
   EXPECT_TRUE(w.bobApp().statusLog().empty()) << "no 0x91 to an app without CMD_RDM_ENABLE";
 }
-
-}
-
-TEST(RdmScenario, S13_StandaardApp) { runS13(CompanionModel::SIM); }
-TEST(RdmScenario, S13_StandaardApp_CompanionNode) { runS13(CompanionModel::FIRMWARE); }
 
 namespace {
 

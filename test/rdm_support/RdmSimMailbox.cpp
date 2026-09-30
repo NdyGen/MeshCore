@@ -29,9 +29,9 @@ RdmSimMailbox::~RdmSimMailbox() = default;
 
 MailboxMesh& RdmSimMailbox::mailbox() { return *_mbx; }
 
-mesh::Mesh* RdmSimMailbox::createMesh() {
+MeshPtr RdmSimMailbox::createMesh() {
   _mbx = new MailboxMesh(radio(), millisClock(), rng(), rtc(), packetManager(), tables(), _backend, name().c_str());
-  return _mbx;
+  return ownMesh(_mbx);
 }
 
 void RdmSimMailbox::beginMesh() { _mbx->begin(); }
