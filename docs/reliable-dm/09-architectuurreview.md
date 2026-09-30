@@ -10,7 +10,7 @@ De drie punten die het zwaarst wegen:
 
 1. **`NodeHost` is een dikke interface die via overerving in `RdmChatMesh` wordt gemengd.** Vier rollen in één contract (klok/RNG, contacten, transport plus crypto, app-pushes) en naamsbotsingen met `BaseChatMesh` (`sendAnonReq` moest met `using` worden hersteld). Dat is het eerste wat breekt bij een upstream-merge.
 2. **Het companion-recept (verzenden, synchroniseren) bestaat twee keer**: in `MyMesh` en in `RdmSimCompanion`, en de meeste scenario's draaien op de kopie. De twee zijn al uiteengelopen.
-3. **De grens radio <-> `mbxd` heeft geen versie en geen door de Pi geïnitieerde sessie-opbouw**: herstel na een `mbxd`-herstart leunt op het neveneffect dat het openen van de seriële poort de ESP32 reset.
+3. **De grens radio <-> `meshcore-mailboxd` heeft geen versie en geen door de Pi geïnitieerde sessie-opbouw**: herstel na een daemon-herstart leunt op het neveneffect dat het openen van de seriële poort de ESP32 reset.
 
 ## Componenten zoals ze zijn (C4, componentniveau)
 
@@ -49,7 +49,7 @@ flowchart TB
   end
 
   subgraph pi["Container: Raspberry Pi"]
-    MBXD["mbxd.py<br/>SQLite, bron van waarheid"]
+    MBXD["meshcore-mailboxd<br/>SQLite, bron van waarheid"]
   end
 
   APP -- "BLE/USB frames" --> MYMESH
@@ -133,12 +133,12 @@ Afhankelijkheden lopen van boven naar beneden; de enige pijl omhoog is de callba
 
 | bevinding | bewijs | oordeel |
 |---|---|---|
-| Taakverdeling is scherp: radio doet crypto, peer-cache, replay/rate limits, pacing en airtime; `mbxd` doet toestand, TTL, quotum, token, denylist, RESYNC en ziet nooit plaintext. RATE_LIMITED komt alleen van de radio. | `06` par. 3.15, `mbxd/README.md:5,51` | goed |
-| `MailboxCore` is backend-agnostisch; vier backends bewijzen dat (`SerialPiBackend`, `MemMailboxBackend`, `SubprocessBackend`, plus `mbxd` via stdio). | `test/rdm_support/*Backend.h` | goed |
-| Het regelprotocol is een goed gedefinieerde, tekstuele, tolerante grens (onbekende regels genegeerd, 3 s time-out naar NO_STORAGE, commit vóór antwoord). Maar: geen protocolversie (HELLO draagt alleen de firmwareversie, `mbxd` logt die), en de spec staat verdeeld over `06` par. 3.16, de README en de vectoren. | `mbxd.py:223-227`, `06` par. 3.16 | verbeterpunt |
-| Sessie-opbouw is alleen radio-geïnitieerd. Een `mbxd`-herstart komt alleen weer in sync omdat `ser.open()` de ESP32 reset; ACL-wijzigingen (nieuwe owner) vereisen daarom een herstart. Op een board waar poort-open niet reset (nRF52 USB-CDC, sommige USB-UART-bruggen) blijft de radio `ready` met een oude ACL. | `mbxd.py:467-470`, `SerialPiBackend.cpp:126,205,234`, README "restart mbxd" | probleem |
-| Pi vervangen: een andere daemon moet het regelprotocol spreken en de semantiek van de conformance-vectoren volgen. De vectoren testen op operatieniveau (`store/reg/fetch/stat`), niet op regelniveau; de regelcodering wordt alleen via `SubprocessBackend` tegen de echte `mbxd` getest. Een vervanger heeft dus een eigen adapter nodig om de vectoren te draaien. | `test/rdm_vectors/mailbox_conformance.json`, `06` par. 3.17 | verbeterpunt |
-| Semantiek bestaat twee keer (`mbxd.py`, `MemMailboxBackend.cpp` ~400 regels), bewust, bewaakt door dezelfde vectoren en een S07-variant tegen echte `mbxd`. | `06` par. 9 | acceptabel |
+| Taakverdeling is scherp: radio doet crypto, peer-cache, replay/rate limits, pacing en airtime; `meshcore-mailboxd` doet toestand, TTL, quotum, token, denylist, RESYNC en ziet nooit plaintext. RATE_LIMITED komt alleen van de radio. | `06` par. 3.15, `meshcore-mailboxd/README.md` | goed |
+| `MailboxCore` is backend-agnostisch; vier backends bewijzen dat (`SerialPiBackend`, `MemMailboxBackend`, `SubprocessBackend`, plus `meshcore-mailboxd` via stdio). | `test/rdm_support/*Backend.h` | goed |
+| Het regelprotocol is een goed gedefinieerde, tekstuele, tolerante grens (onbekende regels genegeerd, 3 s time-out naar NO_STORAGE, commit vóór antwoord). Maar: geen protocolversie (HELLO draagt alleen de firmwareversie, de daemon logt die), en de spec staat verdeeld over `06` par. 3.16, de README en de vectoren. | `mbxd.py:223-227` (v1-daemon, vervangen), `06` par. 3.16 | verbeterpunt |
+| Sessie-opbouw is alleen radio-geïnitieerd. Een daemon-herstart komt alleen weer in sync omdat `ser.open()` de ESP32 reset; ACL-wijzigingen (nieuwe owner) vereisen daarom een herstart. Op een board waar poort-open niet reset (nRF52 USB-CDC, sommige USB-UART-bruggen) blijft de radio `ready` met een oude ACL. | `mbxd.py:467-470` (v1-daemon, vervangen), `SerialPiBackend.cpp:126,205,234`, README "restart mbxd" (v1) | probleem |
+| Pi vervangen: een andere daemon moet het regelprotocol spreken en de semantiek van de conformance-vectoren volgen. De vectoren testen op operatieniveau (`store/reg/fetch/stat`), niet op regelniveau; de regelcodering wordt alleen via `SubprocessBackend` tegen de echte `meshcore-mailboxd` getest. Een vervanger heeft dus een eigen adapter nodig om de vectoren te draaien. | `test/rdm_vectors/mailbox_conformance.json`, `06` par. 3.17 | verbeterpunt |
+| Semantiek bestaat twee keer (`meshcore-mailboxd`, `MemMailboxBackend.cpp` ~400 regels), bewust, bewaakt door dezelfde vectoren en een S07-variant tegen echte `meshcore-mailboxd`. | `06` par. 9 | acceptabel |
 
 ## 7. Testarchitectuur
 
@@ -147,7 +147,7 @@ Afhankelijkheden lopen van boven naar beneden; de enige pijl omhoog is de callba
 | Drie lagen: unit per module (native, `MemFileIO` met foutinjectie), node-niveau met nep-draad (`test_rdm_node/wire.*`), scenario's in de simulator met echte crypto en echte `MyMesh`. Plus conformance in C++ en Python. ~414 tests. | `test/test_rdm_*`, `07` par. 2 | goed |
 | `RdmSimCompanion` is een tweede implementatie van de companion-app-kant naast de echte `MyMesh`, en 23 van de 27 scenario's draaien op die kopie; alleen S03, S04, S07 en S13 draaien (ook) op `CompanionModel::FIRMWARE`. De kopie is al gedivergeerd (`cap_trailer` hard `true`, geen fallback-`est_timeout`). Wat de scenario's bewijzen, geldt dus grotendeels voor de testkopie, niet voor de firmware. | `test/rdm_support/RdmSimCompanion.cpp:28-48`, `test/test_rdm_scenarios/test_rdm_scenarios.cpp:308,363,707,1070`, A1, R3 | probleem |
 | Testhulpcode dupliceert productiecode: `SubprocessBackend` herimplementeert het regelprotocol van `SerialPiBackend`; `MemFileIO` en `SimFileIO` zijn dezelfde map-FS; SFINAE-steigers in `CompanionNode` uit de WP6-overgang. | A2, A4, A5, R2, R10 | verbeterpunt |
-| Testhaken in productiecode zijn beperkt: `using RdmChatMesh::rdm` maakt heel `Node` publiek op `MyMesh` "voor simulator en tests"; `Node::setEnabled` alleen door tests gebruikt; `mbxd --fake-clock` alleen met `--stdio`. Geen `friend`, geen `#ifdef UNIT_TEST`. | `MyMesh.h:314`, `mbxd.py:436-452,505` | acceptabel |
+| Testhaken in productiecode zijn beperkt: `using RdmChatMesh::rdm` maakt heel `Node` publiek op `MyMesh` "voor simulator en tests"; `Node::setEnabled` alleen door tests gebruikt; `meshcore-mailboxd --fake-clock` alleen met `--stdio`. Geen `friend`, geen `#ifdef UNIT_TEST`. | `MyMesh.h:314`, `meshcore-mailboxd/src/cli.rs` | acceptabel |
 
 ## 8. Evolueerbaarheid richting upstream-PR
 
@@ -167,7 +167,7 @@ Wat juist in het voordeel spreekt: de bewezen code-identiteit zonder flag, de vo
 | # | wanneer | probleem | voorstel | impact | risico | grootte |
 |---|---|---|---|---|---|---|
 | 1 | nu | Companion-recept dubbel (`MyMesh`, `RdmSimCompanion`), al gedivergeerd; scenario's testen grotendeels de kopie (par. 7). | Verplaats het send- en sync-recept naar `RdmChatMesh` (bijv. `rdmSendApp(contact, ts, attempt, text) -> {handled, app_ack, flood, est_timeout}` en `rdmNextInbox(InRecord&)`), zodat `MyMesh` en de simulator dezelfde code aanroepen. Draai daarna de scenario's standaard op `CompanionModel::FIRMWARE` en houd `SIM` alleen waar de frame-laag in de weg zit. | Scenario's bewijzen de firmware; één plek voor I8-logica; `AppSend` vereenvoudigt (tell-don't-ask). | Laag: gedrag gelijk, tests vangen afwijkingen. Header `RdmChatMesh.h` wijzigt (via tech lead). | M |
-| 2 | nu | Sessie-opbouw radio <-> `mbxd` leunt op poort-reset; ACL-wijziging vereist herstart (par. 6). | Laat `mbxd` bij start (en na `owner-add`/`deny` via een admin-signaal) ongevraagd `mbx.hello?` of direct de ACL plus `mbx.ready` sturen, en laat `SerialPiBackend` een nieuwe ACL-reeks altijd accepteren. Voeg een protocolversie toe aan `@MBX HELLO` en `mbx.ready`. | Robuust tegen Pi-herstart, board-onafhankelijk, geen herstart meer na `owner-add`. | Middel: raakt het vastgelegde regelprotocol (`06` par. 3.16) en beide kanten; conformance en S07-mbxd dekken het. | M |
+| 2 | nu | Sessie-opbouw radio <-> `meshcore-mailboxd` leunt op poort-reset; ACL-wijziging vereist herstart (par. 6). | Laat de daemon bij start (en na `owner-add`/`deny` via een admin-signaal) ongevraagd `mbx.hello?` of direct de ACL plus `mbx.ready` sturen, en laat `SerialPiBackend` een nieuwe ACL-reeks altijd accepteren. Voeg een protocolversie toe aan `@MBX HELLO` en `mbx.ready`. | Robuust tegen Pi-herstart, board-onafhankelijk, geen herstart meer na `owner-add`. | Middel: raakt het vastgelegde regelprotocol (`06` par. 3.16) en beide kanten; conformance en S07 tegen de daemon dekken het. | M |
 | 3 | vóór upstream-PR | `NodeHost` dik en via overerving in `BaseChatMesh`-naamruimte (par. 2). | Splits in `NodeMeshHost` (tijd, RNG, contacten, zenden, crypto) en `NodeAppSink` (pushes, `rtcNow`). Laat `RdmChatMesh` een privé geneste adapter bezitten in plaats van `NodeHost` te erven; `MyMesh` geeft zijn app-sink mee. Verwijdert `using BaseChatMesh::sendAnonReq` en de `static_cast` in `MyMesh`. | Geen naamsbotsingen bij upstream-merges; ISP; duidelijker wie wat implementeert. | Middel: vastgelegde header `RdmNode.h` en `RdmChatMesh.h` wijzigen; puur mechanisch, tests dekken het. | M |
 | 4 | vóór upstream-PR | Upstream-ingrepen zijn fork-specifiek geformuleerd (par. 5). | Stel `rdmMatchedPeer`/`rdmSendAckTo` voor als generieke, ongeflagde protected API (`getMatchedPeer(idx)`, `sendAckTo` protected). Stel de exacte lengtecheck in `createDatagram` voor als losse upstream-fix zonder flag. Vervang in `MyMesh` de dubbele `return`-hunks door een `typedef ... MyMeshBase` onder flag. | Kleinere, beter verdedigbare upstream-diff; minder hunks per merge. | Laag voor de fork; de ongeflagde variant raakt stock builds en valt buiten de huidige "code-identiek"-eis, dus alleen als aparte upstream-PR. | S |
 | 5 | vóór upstream-PR | Commentaar verwijst 106x naar interne docs (par. 8). | Vervang `03 par. x`/`Gnn`/`Kn`/`WPn` door een korte zelfstandige reden (het "waarom"); houd één verwijzing naar een upstream te leveren ontwerp-README in `src/helpers/rdm/`. | Code leesbaar zonder de fork-docs. | Laag. | S |

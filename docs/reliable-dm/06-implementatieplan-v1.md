@@ -12,7 +12,7 @@ Dit document legt vast wat parallelle workers nodig hebben: architectuur, header
 | A | inbox en register (ACK na opslag, #3518, dedup over attempts, quotum, watermerk, sync-detectie) | ja |
 | A | cap-trailer en cap-ACK, `ACK_R`/`ACK_S`, `RECEIPT_QUERY` en probe | ja |
 | A | companion: 0x91, `CMD_RDM_*`, `SEND_CONFIRMED` bij `ACK_R`, statuskanaal achter `RDM_STATUS_CHANNEL` | ja |
-| B | mailbox-firmware `examples/mailbox_server` en `mbxd` op de Pi | ja |
+| B | mailbox-firmware `examples/mailbox_server` en `meshcore-mailboxd` op de Pi | ja |
 | B | MBX_INFO met `token_B` (HMAC), registratie, quotum, denylist, DEPOSIT/FETCH/STATUS, RESYNC via `store_id` | ja |
 | - | upstream-PR, GitHub-discussie, #3518-PR indienen | nee (beslissing 5) |
 | - | HIL op hardware | na v1-merge, zie par. 8 |
@@ -43,15 +43,15 @@ Alles achter build-flags. Zonder flag zijn machinecode, data en preprocessor-uit
                                              | test:   MemFileIO (foutinjectie), SimFileIO (sim::SimFS)
 
  examples/mailbox_server/MailboxMesh  --->  rdm::MailboxCore  --->  MailboxBackend (interface)
-                                                                     | device: SerialPiBackend <-> mbxd (Python, Pi)
-                                                                     | test:   MemMailboxBackend (C++), SubprocessBackend (echte mbxd)
+                                                                     | device: SerialPiBackend <-> meshcore-mailboxd (Rust, Pi)
+                                                                     | test:   MemMailboxBackend (C++), SubprocessBackend (echte meshcore-mailboxd)
 ```
 
 Principes:
 - **Protocol-logica is pure C++** in `src/helpers/rdm/`: geen `Arduino.h`, geen `millis()`, geen bestandssysteem, geen radio. Tijd komt binnen als argument (RDM-tijd in seconden, par. 11 G6 van `03`), opslag via `rdm::FileIO`, zenden via host-interfaces.
 - **Eén integratielaag voor device en simulator**: `RdmChatMesh` vertaalt tussen packets en `rdm::Node`. De companion en de simulator gebruiken dezelfde klasse; alleen de app-kant (frames naar de telefoon) verschilt.
 - **Minimale ingreep in upstream-bestanden**: twee protected helpers in `BaseChatMesh` en de exacte lengtecheck in `Mesh::createDatagram`, allebei onder flag. De rest gaat via bestaande virtuele methoden (`onPeerDataRecv`, `onPeerPathRecv`, `onAckRecv`, `onContactPathRecv`, `searchPeersByHash`, `getPeerSharedSecret`).
-- **Mailbox-semantiek op één plek gespecificeerd**: `mbxd` (Python) is bron van waarheid op het device; `MemMailboxBackend` (C++) implementeert dezelfde regels voor de simulator. Beide draaien dezelfde conformance-vectoren (`test/rdm_vectors/mailbox_conformance.json`).
+- **Mailbox-semantiek op één plek gespecificeerd**: `meshcore-mailboxd` (Rust) is bron van waarheid op het device; `MemMailboxBackend` (C++) implementeert dezelfde regels voor de simulator. Beide draaien dezelfde conformance-vectoren (`test/rdm_vectors/mailbox_conformance.json`).
 
 ## 3. Vastgelegde interfaces
 
@@ -898,7 +898,7 @@ src/helpers/rdm/arduino/ArduinoFileIO.{h,cpp}  platformadapter FileIO (WP2)
 src/helpers/rdm/mailbox/MailboxCore.{h,cpp}    serverrol (h: WP0, cpp: WP7)
 examples/companion_radio/...                   (WP6)
 examples/mailbox_server/*.{h,cpp}              (WP7)
-examples/mailbox_server/mbxd/                  (WP8)
+examples/mailbox_server/meshcore-mailboxd/     (WP8)
 test/rdm_support/                              (per bestand, zie par. 5)
 test/rdm_vectors/                              (WP8)
 test/test_rdm_*/                               (per module, zie par. 5)
@@ -932,12 +932,12 @@ Elk bestand heeft precies één eigenaar. Een WP die een bestand van een ander n
 | WP5 | Node en mesh-integratie | `RdmNode.cpp`, `RdmChatMesh.cpp`, `src/Mesh.cpp`, `src/helpers/BaseChatMesh.{h,cpp}`, `test/test_rdm_node/`, `test/rdm_support/RdmSimCompanion.{h,cpp}` | WP1-WP4, simulator | `test_rdm_node` groen; scenario S01 groen in de simulator met twee `RdmSimCompanion`s; H4: `nextWakeupMillis` is het minimum van de onderdelen en nooit te laat, en S02 geeft met en zonder fast-forward een identieke `tx_log` |
 | WP6 | Companion | `examples/companion_radio/{main.cpp, MyMesh.h, MyMesh.cpp, DataStore.h, DataStore.cpp, RdmCompanionProto.h}`, `variants/{heltec_v3,rak4631,lilygo_tbeam_SX1262}/platformio.ini`, `test/test_rdm_companion_proto/` | WP5 | envs `Heltec_v3_companion_radio_ble_rdm`, `RAK_4631_companion_radio_ble_rdm`, `Tbeam_SX1262_companion_radio_ble_rdm` en `Heltec_v3_mailbox_server` (blokken hieronder) bouwen; statuskanaal achter `RDM_STATUS_CHANNEL` bouwt; frame-tests groen |
 | WP7 | Mailbox-firmware | `MailboxCore.cpp`, `examples/mailbox_server/{main.cpp, MailboxMesh.h, MailboxMesh.cpp, SerialPiBackend.h, SerialPiBackend.cpp}`, `test/test_rdm_mailbox_core/`, `test/rdm_support/RdmSimMailbox.{h,cpp}` | WP0, WP1, WP8 (`MemMailboxBackend`) | core-tests groen met `MemMailboxBackend`; `nextWakeupMillis` dekt de 3 s-backend-time-out; `SerialPiBackend` getest tegen opgenomen regels (par. 3.16); env bouwt |
-| WP8 | mbxd en referentie-backend | `examples/mailbox_server/mbxd/{mbxd.py, test_mbxd.py, mbxd.service, README.md}`, `test/rdm_vectors/mailbox_conformance.json`, `test/rdm_support/MemMailboxBackend.{h,cpp}`, `test/test_rdm_mailbox_conformance/` | WP0 | `pytest` en `test_rdm_mailbox_conformance` groen op dezelfde vectoren; crash tussen insert en commit geeft geen `mbx.store` |
-| WP9 | Scenario-integratietests | `test/test_rdm_scenarios/`, `test/rdm_support/{RdmSimApp.h, RdmScenario.h, RdmScenario.cpp, SubprocessBackend.h, SubprocessBackend.cpp}` | WP5, WP6 (proto), WP7, WP8, simulator | par. 6.2 volledig groen, inclusief S07 met echte `mbxd` via `SubprocessBackend` |
-| WP10 | Compat-bewijs | `tools/rdm/check-upstream-identical.sh`, `tools/rdm/run-all-tests.sh`, `tools/rdm/check-headers.py` | WP5, WP6 | `check-upstream-identical.sh` bouwt de base (`22baa5e3`) en de werkboom na elkaar op hetzelfde pad met vaste `SOURCE_DATE_EPOCH` (RadioLib, Crypto en de ESP32-core bakken `__DATE__`/`__TIME__` in) en toont voor de drie companion-envs en voor `native`/`native_kiss_modem` identieke objecten, identieke preprocessor-uitvoer (`-E -P`, plus `.d`-bestanden) van `Mesh.cpp`, `BaseChatMesh.cpp`, `MyMesh.cpp`, `DataStore.cpp` en elke andere gewijzigde bron, en identieke firmware-images. Objecten die alleen in debug-info verschillen (vergeleken na `--strip-debug` met de objcopy van de juiste toolchain) en ESP32-images die alleen in `app_elf_sha256` en de image-hash verschillen, tellen als CODE-IDENTICAL (besluit WP5). `--compare-only` hergebruikt een eerdere build. `run-all-tests.sh` draait alle `native*`-envs en de pytest van `mbxd`, met samenvatting |
+| WP8 | daemon en referentie-backend | `examples/mailbox_server/meshcore-mailboxd/` (Rust; de Python-daemon `mbxd.py` van v1 is in refactorronde 2 vervangen), `test/rdm_vectors/mailbox_conformance.json`, `test/rdm_support/MemMailboxBackend.{h,cpp}`, `test/test_rdm_mailbox_conformance/` | WP0 | `cargo test` en `test_rdm_mailbox_conformance` groen op dezelfde vectoren; crash tussen insert en commit geeft geen `mbx.store` |
+| WP9 | Scenario-integratietests | `test/test_rdm_scenarios/`, `test/rdm_support/{RdmSimApp.h, RdmScenario.h, RdmScenario.cpp, SubprocessBackend.h, SubprocessBackend.cpp}` | WP5, WP6 (proto), WP7, WP8, simulator | par. 6.2 volledig groen, inclusief S07 met echte `meshcore-mailboxd` via `SubprocessBackend` |
+| WP10 | Compat-bewijs | `tools/rdm/check-upstream-identical.sh`, `tools/rdm/run-all-tests.sh`, `tools/rdm/check-headers.py` | WP5, WP6 | `check-upstream-identical.sh` bouwt de base (`22baa5e3`) en de werkboom na elkaar op hetzelfde pad met vaste `SOURCE_DATE_EPOCH` (RadioLib, Crypto en de ESP32-core bakken `__DATE__`/`__TIME__` in) en toont voor de drie companion-envs en voor `native`/`native_kiss_modem` identieke objecten, identieke preprocessor-uitvoer (`-E -P`, plus `.d`-bestanden) van `Mesh.cpp`, `BaseChatMesh.cpp`, `MyMesh.cpp`, `DataStore.cpp` en elke andere gewijzigde bron, en identieke firmware-images. Objecten die alleen in debug-info verschillen (vergeleken na `--strip-debug` met de objcopy van de juiste toolchain) en ESP32-images die alleen in `app_elf_sha256` en de image-hash verschillen, tellen als CODE-IDENTICAL (besluit WP5). `--compare-only` hergebruikt een eerdere build. `run-all-tests.sh` draait alle `native*`-envs en `cargo test` van `meshcore-mailboxd`, met samenvatting |
 | extern | Simulator (dm-current) | `test/sim/*`, `test/test_sim_*/`, `[env:native_sim]`, `07-simulator.md` | - | eisen in par. 7 |
 
-Integratie: `tools/rdm/integrate.sh [--dry-run] [--no-test] <worktree> [wp...]` kopieert de bestanden van een WP uit diens worktree naar de hoofdcheckout (eigen mappen gespiegeld, met backup), waarschuwt bij gewijzigde WP0-headers en bij bestanden buiten het eigendom, en draait daarna `native_rdm`, `native_sim` en (als aanwezig) de pytest van `mbxd`.
+Integratie: `tools/rdm/integrate.sh [--dry-run] [--no-test] <worktree> [wp...]` kopieert de bestanden van een WP uit diens worktree naar de hoofdcheckout (eigen mappen gespiegeld, met backup), waarschuwt bij gewijzigde WP0-headers en bij bestanden buiten het eigendom, en draait daarna `run-all-tests.sh` (alle native envs en `cargo test` van `meshcore-mailboxd`).
 
 Kritisch pad: WP0 -> WP1/WP2 (parallel) -> WP3/WP4 (parallel) -> WP5 -> WP6 en WP9. WP7 en WP8 lopen vanaf WP0 parallel. WP3 en WP4 kunnen al starten met alleen de headers; hun tests linken pas als WP1 en WP2 klaar zijn.
 
@@ -980,7 +980,7 @@ build_flags =
   ${Heltec_lora32_v3.build_flags}
   -D DISPLAY_CLASS=SSD1306Display
   -D ADVERT_NAME='"Mailbox"'
-  -D LORA_CR=8                    ; geen CLI (poort is van mbxd): CR komt uit de build; FREQ/BW/SF uit arduino_base
+  -D LORA_CR=8                    ; geen CLI (poort is van meshcore-mailboxd): CR komt uit de build; FREQ/BW/SF uit arduino_base
   -D WITH_DM_MAILBOX
 ;  -D MBX_FLOOD_SCOPE='"<regio>"'  ; alleen als de repeaters unscoped floods weigeren
 build_src_filter = ${Heltec_lora32_v3.build_src_filter}
@@ -1009,7 +1009,7 @@ lib_deps =
 | `test_rdm_companion_proto` | companion-frames | encode/decode van 3.14 |
 | `test_rdm_mailbox_core` | MailboxCore | alle DEPOSIT-codes; 3 s zonder backend = NO_STORAGE; rate-limits; replaycheck; flood-FETCH -> PATH-return zonder kopie; TOO_BIG zonder backend-aanroep; registratie |
 | `test_rdm_mailbox_conformance` | MemMailboxBackend | alle cases uit de JSON |
-| `test_mbxd.py` (pytest) | mbxd | alle cases uit de JSON; regelparser; commit voor antwoord; herstart behoudt stand; TTL; quotum; token en denylist; `store_id`-wissel = RESYNC; SENT zonder rapport terug naar STORED |
+| `cargo test` in `meshcore-mailboxd` | daemon | alle cases uit de JSON; regelparser; commit voor antwoord; herstart behoudt stand; TTL; quotum; token en denylist; `store_id`-wissel = RESYNC; SENT zonder rapport terug naar STORED |
 
 ### 6.2 Integratietests in de simulator (`test/test_rdm_scenarios/`)
 
@@ -1052,7 +1052,7 @@ Alles in de hoofdcheckout, niet gecommit. `tools/rdm/run-all-tests.sh`: ALL PASS
 | native_sim | 22/22 (simulator zelf, upstream-gedrag, L1/L3/L6/#3518 reproduceerbaar) |
 | native_rdm | 431/431 |
 | native_rdm_status | 38/38 (companion-suites met `RDM_STATUS_CHANNEL`) |
-| pytest `mbxd` | 86 passed |
+| pytest `mbxd` (v1-daemon, in ronde 2 vervangen door `meshcore-mailboxd` met `cargo test`) | 86 passed |
 
 Scenario's uit `05` en par. 6.2, alle groen:
 
@@ -1064,7 +1064,7 @@ Scenario's uit `05` en par. 6.2, alle groen:
 | S04 Bob weg | `RdmScenario.S04_BobWegVoorAckS`, `..._GevuldRegister` (EVICTED) | idem |
 | S05 nooit tegelijk | `RdmScenario.S05_NooitTegelijk`, `..._SlotNaVierentwintigUur` | idem |
 | S06 inbox kwijt | `RdmScenario.S06_AliceVerliestInbox`, `..._G7Duplicaat` (D2) | idem |
-| S07 mailbox | `RdmScenario.S07_Mailbox`, `..._CompanionNode`, `S07_MailboxEchteMbxd` (echte `mbxd` via `SubprocessBackend`) | idem |
+| S07 mailbox | `RdmScenario.S07_Mailbox`, `..._CompanionNode`, `S07_MailboxEchteMbxd` (echte `meshcore-mailboxd` via `SubprocessBackend`) | idem |
 | S08 RESYNC | `RdmScenario.S08_MailboxResync` | idem |
 | S09a/b | `RdmScenario.S09a_MailboxOnbereikbaar`, `S09b_MailboxAchterhaald` | idem |
 | S10 standaard Alice | `RdmScenario.S10_AliceStandaard`, `..._Backoff`, `RdmSim.StockAliceGetsAnUpstreamAckWithoutCap` | `test_rdm_scenarios.cpp`, `test_rdm_sim.cpp` |
@@ -1109,7 +1109,7 @@ Bevindingen uit de simulator die het ontwerp raken: de klok van de companion na 
 | risico | gevolg | maatregel |
 |---|---|---|
 | Simulator-eis S2 of S3 laat op zich wachten | WP9 staat stil | `test_rdm_node` (nep-draad) dekt de protocolketen al; WP9 start met S01 zodra S2 er is |
-| Semantiekverschil `mbxd` tegenover `MemMailboxBackend` | groene sim, rode Pi | gedeelde conformance-vectoren blokkeren beide WP's; S07 draait ook tegen echte `mbxd` |
+| Semantiekverschil `meshcore-mailboxd` tegenover `MemMailboxBackend` | groene sim, rode Pi | gedeelde conformance-vectoren blokkeren beide WP's; S07 draait ook tegen echte `meshcore-mailboxd` |
 | Flash op nRF52 zonder extra FS te klein | RDM uit op die borden | `RDM_MIN_FREE_BYTES`, fallback naar standaard; gemeten in WP6 |
 | `RdmChatMesh` dupliceert een stuk van `BaseChatMesh::onPeerDataRecv` (plain-TXT-tak) | afwijking bij upstream-wijziging | WP10 vergelijkt; test in `test_rdm_node` dat een DM zonder trailer exact dezelfde ACK geeft als upstream |
 | Standaard app reageert onverwacht op nieuwe frames | app-fouten | 0x91 alleen na `CMD_RDM_ENABLE` (K9); HIL na v1 |

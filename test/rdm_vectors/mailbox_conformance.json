@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "description": "Mailbox conformance vectors (06-implementatieplan-v1.md par. 3.17). Run by examples/mailbox_server/mbxd/test_mbxd.py and test/test_rdm_mailbox_conformance. Rules: examples/mailbox_server/mbxd/README.md.",
+  "description": "Mailbox conformance vectors (06-implementatieplan-v1.md par. 3.17). Run by examples/mailbox_server/meshcore-mailboxd/tests/conformance.rs and test/test_rdm_mailbox_conformance. Rules: examples/mailbox_server/meshcore-mailboxd/README.md.",
   "format": {
     "t": "mailbox clock in seconds (unix time); steps are ordered, housekeeping runs at t before each op",
     "id": "request id is the step index within the case",

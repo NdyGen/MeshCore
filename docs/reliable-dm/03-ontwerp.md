@@ -259,16 +259,16 @@ Op 4 MB-ESP32-borden met `min_spiffs.csv` is SPIFFS 128 KB (partitie 0x20000), g
 
 ## 7. Dedicated mailbox: Heltec en eigen Pi (beslissing 3)
 
-Eigen Heltec V3 (868) met `examples/mailbox_server`, eigen Pi met `mbxd`. `meshcore-room/pi/rs01d.py` is codebasis: seriële poort één keer openen en vasthouden (elke open reset de ESP32), SQLite, systemd-unit. Geen pty-doorgifte naar MQTT, geen webpagina (R4, AUP). De radio doet crypto, peer-cache en zendplanning; `mbxd` is bron van waarheid voor berichten, ACL, owners, tokens.
+Eigen Heltec V3 (868) met `examples/mailbox_server`, eigen Pi met `meshcore-mailboxd`. `meshcore-room/pi/rs01d.py` is codebasis: seriële poort één keer openen en vasthouden (elke open reset de ESP32), SQLite, systemd-unit. Geen pty-doorgifte naar MQTT, geen webpagina (R4, AUP). De radio doet crypto, peer-cache en zendplanning; `meshcore-mailboxd` is bron van waarheid voor berichten, ACL, owners, tokens.
 
 | richting | regel (115200 baud) |
 |---|---|
 | radio -> Pi | `@MBX STORE <id> <owner4> <sender32hex> <hash8hex> <b64 payload>`, `@MBX REG <id> <sender32hex> <owner4> <token8hex>`, `@MBX FETCH <id> <client32hex> <flags> <store_id8hex> <rapporten>` (M herkent de owner aan de pubkey), `@MBX STAT <id> <sender> <hash>...` |
-| Pi -> radio | `mbx.store <id> <code> <expires>` pas na `COMMIT` met `synchronous=FULL` (absolute Pi-tijd; de radio stuurt Bob `ttl_s`), `mbx.time <unix>` na `mbx.ready` en elke 600 s, `mbx.reg <id> <code> <ttl> <quota>`, `mbx.fetch <id> <code> <resterend> <ok> <b64 of ->`, `mbx.stat <id> <code> <state:ack,...>`, `mbx.acl <pub> <rol> <owner4>`, `mbx.ready` |
+| Pi -> radio | `mbx.store <id> <code> <expires>` pas na `COMMIT` met `synchronous=FULL` (absolute Pi-tijd; de radio stuurt Bob `ttl_s`), `mbx.time <unix>` na `mbx.ready 2` en elke 600 s, `mbx.reg <id> <code> <ttl> <quota>`, `mbx.fetch <id> <code> <resterend> <ok> <b64 of ->`, `mbx.stat <id> <code> <state:ack,...>`, `mbx.acl <pub> <rol> <owner4>`, `mbx.ready 2` (sessieprotocol v2 met `mbx.hello?` en `@MBX HELLO 2 <fw>`: `06` par. 3.16) |
 
 - DEPOSIT wordt pas STORED na `mbx.store` met code 00 of 01; geen antwoord binnen 3 s geeft NO_STORAGE. Zonder Pi geen deposits, geen RAM-fallback.
 - De Pi controleert `token_B` met `K_owner` en de denylist; de radio kent `K_owner` niet.
-- De mailbox-radio heeft geen CLI (de seriële poort is van `mbxd`): radio-instellingen komen uit de build (NL: 869.618 / 62,5 / SF8 / CR8). Hij adverteert als `ADV_TYPE_ROOM` 30 s na boot en elke 12 u; een login vanuit een standaard app wordt genegeerd. Floods (adverts, PATH-returns zonder pad) gaan unscoped, tenzij `MBX_FLOOD_SCOPE` gezet is.
+- De mailbox-radio heeft geen CLI (de seriële poort is van `meshcore-mailboxd`): radio-instellingen komen uit de build (NL: 869.618 / 62,5 / SF8 / CR8). Hij adverteert als `ADV_TYPE_ROOM` 30 s na boot en elke 12 u; een login vanuit een standaard app wordt genegeerd. Floods (adverts, PATH-returns zonder pad) gaan unscoped, tenzij `MBX_FLOOD_SCOPE` gezet is.
 - De radio houdt de pubkeys en secrets van actieve depositors in een RAM-cache (64 × 64 B); een cache-miss laat Bob na een time-out opnieuw registreren.
 - CLI-regelbuffer onder `WITH_DM_MAILBOX` naar 384 bytes (nu 152, toelichting bij `MAX_POST_BYTES` in `rs01d.py`).
 - Het exacte regelformaat staat in `06-implementatieplan-v1.md` (WP8); daar is het leidend.
@@ -287,7 +287,7 @@ Besloten door Andy op 29 sep 2026:
 
 1. **Zichtbaarheid "in bewaring"**: `PUSH_CODE_RDM_STATUS` (0x91) en `CMD_RDM_*`, plus optioneel statuskanaal "rdm-status" achter `RDM_STATUS_CHANNEL`.
 2. **"Afgeleverd" = Alice' telefoon heeft het opgehaald**: `ACK_R` voor "op Alice' radio", `ACK_S` bij sync (par. 1a, 1c).
-3. **Dedicated mailbox** met eigen Heltec en eigen Pi (`mbxd`), rs01d als codebasis.
+3. **Dedicated mailbox** met eigen Heltec en eigen Pi (`meshcore-mailboxd`), rs01d als codebasis.
 4. **Autorisatie**: token van Alice via MBX_INFO, quotum per afzender; uitgewerkt als token per afzender (HMAC) en alleen naar favorieten (review I3).
 5. **Upstream**: bouwen met voorlopige nummers; GitHub-discussie pas met meetdata; #3518-fix als losse PR-kandidaat, nog niet indienen.
 
@@ -318,8 +318,8 @@ Unit tests met `pio test -e native` (googletest, `platformio.ini:163-170`, mocks
 | 3 | Cap-trailer en cap-ACK, sync-detectie, `ACK_S`, `RECEIPT_QUERY` | Unit: testvectoren `ACK_S` en `K` met twee attempt-klassen; standaard ontvanger-pad negeert trailer (bestaande ACK ongewijzigd); PATH-extra met nulpadding geeft geen cap. HIL met standaard app: de drie open punten uit par. 9; `SEND_CONFIRMED` bij `ACK_R` (beslissing 6). |
 | 4 | Outbox (optie A): app-retries op één entry, firmware-attempts vanaf 252, probes, T_radio/T_sync, receipt-watch, `unreported`, NO_OUTBOX, REQ-timestamp persistent | Unit: toestandsmachine met nepklok, inclusief I8 (a)-(c), EVICTED in ON_RADIO en ervoor, UNKNOWN in ON_RADIO. HIL: Alice' radio 3 u per dag aan (timer), tijd tot aflevering meten; Bob reboot tussendoor. Meetpunt voor het kantelpunt. |
 | 5 | MBX_INFO met `token_B`, alleen naar favorieten; verborgen peer-tabel | Unit: HMAC-testvector, codec. HIL: fork en standaard in alle vier combinaties; auto-added contact krijgt geen MBX_INFO. |
-| 6 | `examples/mailbox_server` + `mbxd` | Unit: codecs DEPOSIT/FETCH/STATUS; pytest `mbxd` (commit voor `mbx.store`, token/denylist, quota, T_radio/T_sync, RESYNC, SENT zonder rapport terug naar STORED, herstart). HIL: registratie met geldig, ongeldig en ingetrokken token; deposit met Pi aan en uit. |
-| 7 | Mailbox-client: deposit, STATUS, FETCH met rapporten, probes in CUSTODY | HIL: Alice' radio uit, Bob deponeert en gaat uit; Alice' radio aan (kopie, ON_RADIO); app verbindt (SYNCED); Bob aan (DELIVERED). Negatief: `mbxd` met willekeurige ack, `ACK_R` als `ACK_S` aangeboden, Alice kent Bob niet (REJECTED), mailbox houdt achter terwijl Alice bereikbaar is (probe levert direct af, I4), FETCH-antwoord verloren (heraflevering, 1x getoond), 153 bytes tekst (TOO_BIG). |
+| 6 | `examples/mailbox_server` + `meshcore-mailboxd` | Unit: codecs DEPOSIT/FETCH/STATUS; `cargo test` in `meshcore-mailboxd` (commit voor `mbx.store`, token/denylist, quota, T_radio/T_sync, RESYNC, SENT zonder rapport terug naar STORED, herstart). HIL: registratie met geldig, ongeldig en ingetrokken token; deposit met Pi aan en uit. |
+| 7 | Mailbox-client: deposit, STATUS, FETCH met rapporten, probes in CUSTODY | HIL: Alice' radio uit, Bob deponeert en gaat uit; Alice' radio aan (kopie, ON_RADIO); app verbindt (SYNCED); Bob aan (DELIVERED). Negatief: een daemon met willekeurige ack, `ACK_R` als `ACK_S` aangeboden, Alice kent Bob niet (REJECTED), mailbox houdt achter terwijl Alice bereikbaar is (probe levert direct af, I4), FETCH-antwoord verloren (heraflevering, 1x getoond), 153 bytes tekst (TOO_BIG). |
 | 8 | App-zichtbaarheid volgens beslissingen 1 en 6; statuskanaal na stap 3 | meshcore_py-script met `CMD_RDM_ENABLE` en 0x91; standaard app zonder aanmelding krijgt geen 0x91; statuskanaal bij volle queue. |
 | 9 | Zendtijd meten per scenario (tellingen op de mailbox-Pi en de companions) en PR's voorbereiden | Meting naast par. 5; afwijking > 20% verklaren. Daarna GitHub-discussie over de voorlopige nummers. |
 
