@@ -1,7 +1,5 @@
 #include "RdmSimCompanion.h"
 
-#include <helpers/rdm/RdmCodec.h>
-
 #include <algorithm>
 #include <string.h>
 
@@ -14,29 +12,22 @@ static constexpr float DIRECT_SEND_PERHOP_FACTOR = 6.0f;
 static constexpr uint32_t DIRECT_SEND_PERHOP_EXTRA_MILLIS = 250;
 static const char* CONTACTS_FILE = "/contacts";
 
-class RdmSimCompanion::Impl : public RdmChatMesh {
+class RdmSimCompanion::Impl : public RdmChatMesh, private rdm::NodeAppSink {
   RdmSimCompanion& _n;
 
 public:
   Impl(RdmSimCompanion& n, mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc,
        mesh::PacketManager& mgr, mesh::MeshTables& tables, rdm::FileIO& io)
-      : RdmChatMesh(radio, ms, rng, rtc, mgr, tables, io), _n(n) {}
+      : RdmChatMesh(radio, ms, rng, rtc, mgr, tables, io, *this), _n(n) {}
 
   rdm::Node& node() { return rdm(); }
+  bool nextInbox(rdm::InRecord& r) { return rdmNextInbox(r); }
 
-  // CMD_SEND_TXT_MSG under WITH_RELIABLE_DM: the outbox decides, the DM carries the cap trailer.
+  // CMD_SEND_TXT_MSG under WITH_RELIABLE_DM: handled by the outbox, or the upstream way.
   uint32_t sendApp(ContactInfo& c, uint32_t ts, uint8_t attempt, const std::string& text, bool& handled) {
-    rdm::Node::AppSend a = rdm().onAppSend(c.id.pub_key, ts, attempt, text.data(), text.size());
+    AppSend a = rdmSendApp(c, ts, attempt, text.data(), text.size());
     handled = a.handled;
-    if (a.handled) {
-      if (a.transmit) {
-        uint8_t plain[5 + rdm::MAX_TEXT + 3];
-        size_t n = rdm::codec::buildTxtPlain(plain, ts, TXT_TYPE_PLAIN, a.attempt, text.data(), text.size(), true);
-        uint32_t est = 0;
-        if (n && sendTxtPlain(c.id.pub_key, plain, n, false, est)) rdm().onAppTransmitted(c.id.pub_key, ts, est);
-      }
-      return a.app_ack;
-    }
+    if (a.handled) return a.app_ack;
     uint32_t expected = 0, est = 0;
     if (sendMessage(c, ts, attempt, text.c_str(), expected, est) != MSG_SEND_FAILED && expected) {
       UpstreamAck u;
@@ -47,8 +38,8 @@ public:
     return expected;
   }
 
-protected:
-  // NodeHost, app side
+private:
+  // rdm::NodeAppSink
   uint32_t rtcNow(bool& trusted) override {
     trusted = _n.has_rtc_battery() || _n.rtc().setSinceBoot();
     return getRTCClock()->getCurrentTime();
@@ -69,6 +60,7 @@ protected:
   }
   void pushMsgWaiting() override { _n._sync_wanted = true; }
 
+protected:
   // BaseChatMesh
   void onDiscoveredContact(ContactInfo&, bool, uint8_t, const uint8_t*) override { _n.saveContacts(); }
   void onContactPathUpdated(const ContactInfo&) override { _n.saveContacts(); }
@@ -196,14 +188,10 @@ void RdmSimCompanion::sync() {
   _sync_wanted = false;
   if (!powered() || !_connected) return;
   Simulator::OnNode ctx(sim(), *this);
-  rdm::Node& n = rdm();
   for (;;) {
-    n.onSyncRequest();
     rdm::InRecord r;
-    uint16_t slot;
-    if (!n.nextInboxFrame(r, slot)) break;
+    if (!_impl->nextInbox(r)) break;
     _inbox.push_back({indexForPubKey(r.sender_prefix), std::string(r.text, r.text_len), r.ts, sim().now(), true});
-    n.onInboxFrameHanded(slot);
   }
   for (auto& m : _upstream_queue) _inbox.push_back(m);
   _upstream_queue.clear();

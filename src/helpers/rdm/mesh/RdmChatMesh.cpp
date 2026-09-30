@@ -1,7 +1,5 @@
 #include "RdmChatMesh.h"
 
-#include <helpers/rdm/RdmCodec.h>
-
 #include <string.h>
 
 // Same defaults as BaseChatMesh.cpp, so fork ACKs and replies keep upstream timing.
@@ -13,13 +11,37 @@
 #endif
 
 RdmChatMesh::RdmChatMesh(mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc,
-                         mesh::PacketManager& mgr, mesh::MeshTables& tables, rdm::FileIO& io)
-    : BaseChatMesh(radio, ms, rng, rtc, mgr, tables), _rdm(io, *this) {
+                         mesh::PacketManager& mgr, mesh::MeshTables& tables, rdm::FileIO& io, rdm::NodeAppSink& app)
+    : BaseChatMesh(radio, ms, rng, rtc, mgr, tables), _host(*this), _rdm(io, _host, app) {
   memset(_hp, 0, sizeof(_hp));
   memset(_hidden_match, 0, sizeof(_hidden_match));
 }
 
 rdm::Node& RdmChatMesh::rdm() { return _rdm; }
+
+// ---- app side ----
+
+// Plain DMs go through the outbox: the app keeps its own retries, they land on the same entry (I8), and the answer is
+// RESP_CODE_SENT with the ACK_R of this attempt. A DM the node could not send now stays in the outbox, which sends
+// it; the app still gets the timeout it would have had.
+RdmChatMesh::AppSend RdmChatMesh::rdmSendApp(const ContactInfo& to, uint32_t ts, uint8_t attempt, const char* text,
+                                             size_t len) {
+  rdm::Node::AppSend a = _rdm.appSend(to.id.pub_key, ts, attempt, text, len);
+  AppSend r;
+  r.handled = a.handled;
+  r.flood = to.out_path_len == OUT_PATH_UNKNOWN;
+  r.app_ack = a.app_ack;
+  r.est_timeout_ms = a.handled && !a.sent ? estTimeoutForPlain(5 + len + 3, to) : a.est_timeout_ms;
+  return r;
+}
+
+bool RdmChatMesh::rdmNextInbox(rdm::InRecord& out) {
+  _rdm.onSyncRequest();
+  uint16_t slot;
+  if (!_rdm.nextInboxFrame(out, slot)) return false;
+  _rdm.onInboxFrameHanded(slot);
+  return true;
+}
 
 // ---- hidden peers (mailboxes) ----
 
@@ -108,9 +130,10 @@ void RdmChatMesh::handleTxtPlain(mesh::Packet* pkt, ContactInfo& from, const uin
   if (d.result == rdm::RecvResult::NEW || d.result == rdm::RecvResult::DUPLICATE) {
     from.lastmod = getRTCClock()->getCurrentTime();
   }
+  rdm::codec::TxtParsed p;
+  bool parsed = rdm::codec::parseTxtPlain(data, len, p);
   if (d.send_ack_r) {
-    rdm::codec::TxtParsed p;
-    uint8_t ext = rdm::codec::parseTxtPlain(data, len, p) ? p.ext_attempt : 0;
+    uint8_t ext = parsed ? p.ext_attempt : 0;
     uint8_t rnd;
     getRNG()->random(&rnd, 1);
     uint8_t ack[7];
@@ -124,6 +147,7 @@ void RdmChatMesh::handleTxtPlain(mesh::Packet* pkt, ContactInfo& from, const uin
     }
   }
   if (d.send_ack_s) rdmSendAckTo(from, d.ack_s, 6);
+  if (d.result == rdm::RecvResult::NEW && parsed) rdmOnMessageStored(pkt, from, p);
 }
 
 void RdmChatMesh::sendReply(mesh::Packet* pkt, ContactInfo& from, const uint8_t* secret, const uint8_t* reply,
@@ -213,7 +237,7 @@ void RdmChatMesh::onHiddenPeersChanged() {
   }
 }
 
-// ---- NodeHost, mesh side ----
+// ---- mesh side of the node ----
 
 uint32_t RdmChatMesh::millis() { return _ms->getMillis(); }
 
@@ -234,6 +258,14 @@ bool RdmChatMesh::lookupContact(const uint8_t pub_prefix[6], uint8_t pub_out[32]
   favourite = c->isFav();
   has_path = c->out_path_len != OUT_PATH_UNKNOWN;
   return true;
+}
+
+// The timeout the app would have had for a plaintext the node did not send now: the datagram length upstream
+// would build for it (Mesh::createDatagram), like sendToPeer for a real packet.
+uint32_t RdmChatMesh::estTimeoutForPlain(size_t plain_len, const ContactInfo& to) const {
+  uint32_t t = _radio->getEstAirtimeFor(2 + 2 * PATH_HASH_SIZE + CIPHER_MAC_SIZE +
+                                        ((plain_len + CIPHER_BLOCK_SIZE - 1) / CIPHER_BLOCK_SIZE) * CIPHER_BLOCK_SIZE);
+  return to.out_path_len == OUT_PATH_UNKNOWN ? calcFloodTimeoutMillisFor(t) : calcDirectTimeoutMillisFor(t, to.out_path_len);
 }
 
 // flood = true forces flood; otherwise direct whenever a path is known (contact or mailbox).
@@ -298,7 +330,7 @@ bool RdmChatMesh::sendReq(const uint8_t peer_pub[32], uint32_t req_ts, const uin
   return true;
 }
 
-bool RdmChatMesh::sendAnonReq(const uint8_t peer_pub[32], const uint8_t* plain, size_t len, uint32_t& est_timeout_ms) {
+bool RdmChatMesh::sendAnonReqToPeer(const uint8_t peer_pub[32], const uint8_t* plain, size_t len, uint32_t& est_timeout_ms) {
   mesh::Packet* pkt = createAnonDatagram(PAYLOAD_TYPE_ANON_REQ, self_id, mesh::Identity(peer_pub),
                                          hiddenPeer(peer_pub).secret, plain, len);
   if (!pkt) return false;

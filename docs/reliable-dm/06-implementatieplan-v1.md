@@ -576,18 +576,15 @@ Fetcher-regels uit WP4: minimaal `RDM_MBX_REQ_GAP_S` tussen twee FETCH's; één 
 ```cpp
 namespace rdm {
 
-class NodeHost {
+// Mesh-kant van de node: tijd, toeval, contacten en zenden (de adapter van RdmChatMesh).
+class NodeMeshHost {
 public:
-  virtual ~NodeHost() {}
-  // tijd en toeval
+  virtual ~NodeMeshHost() {}
   virtual uint32_t millis() = 0;
-  virtual uint32_t rtcNow(bool& trusted) = 0;
   virtual uint32_t random32() = 0;
   virtual bool     txIdle() = 0;
   virtual void     selfPub(uint8_t pub_out[32]) = 0;       // eigen identiteit (self_id.pub_key)
-  // contacten
   virtual bool lookupContact(const uint8_t pub_prefix[6], uint8_t pub_out[32], bool& favourite, bool& has_path) = 0;
-  // zenden (RdmChatMesh implementeert)
   virtual bool sendTxtPlain(const uint8_t pub_prefix[6], const uint8_t* plain, size_t len, bool flood, uint32_t& est_timeout_ms) = 0;
   virtual bool sendAck(const uint8_t pub_prefix[6], const uint8_t* ack, uint8_t len) = 0;
   virtual bool sendReq(const uint8_t peer_pub[32], uint32_t req_ts, const uint8_t* body, size_t len, bool flood,
@@ -597,12 +594,18 @@ public:
                                  uint8_t* payload_out, size_t& payload_len) = 0;
   virtual bool decryptTxtPayload(const uint8_t* payload, size_t len, uint8_t sender_pub_out[32],
                                  uint8_t* plain_out, size_t& plain_len) = 0;
-  // app-kant (companion of sim)
+  // K3: de set verborgen peers (eigen mailbox, mailboxen van contacten) is gewijzigd, ook één keer na begin()
+  virtual void onHiddenPeersChanged() {}
+};
+
+// App-kant van de node: de companion (MyMesh) of de simulator.
+class NodeAppSink {
+public:
+  virtual ~NodeAppSink() {}
+  virtual uint32_t rtcNow(bool& trusted) = 0;
   virtual bool pushUserStatus(const uint8_t pub_prefix[6], uint32_t app_ack, UserStatus s, const uint8_t key[4], uint32_t ts) = 0;
   virtual bool pushSendConfirmed(uint32_t app_ack) = 0;
   virtual void pushMsgWaiting() = 0;
-  // K3: de set verborgen peers (eigen mailbox, mailboxen van contacten) is gewijzigd, ook één keer na begin()
-  virtual void onHiddenPeersChanged() {}
 };
 
 class Node : private OutboxHost, private InboxHost, private FetcherHost {
@@ -610,7 +613,7 @@ public:
   static constexpr uint16_t    MBX_RECORD_SIZE = 32 + 16;   // eigen mailbox: pubkey | K_owner
   static constexpr const char* MBX_PATH = "/rdm/mbx";
 
-  Node(FileIO& io, NodeHost& host);
+  Node(FileIO& io, NodeMeshHost& mesh, NodeAppSink& app);
   bool begin();                      // bestanden openen, aantallen uit io.freeBytes(); false = RDM uit
   bool enabled() const;
   void setEnabled(bool on);          // runtime-uit: exact upstreamgedrag (scenario 10, standaard-Alice in de sim)
@@ -619,10 +622,10 @@ public:
   // 0 = nu, UINT32_MAX = niets; mag te vroeg, nooit te laat. Voor fast-forward in de sim en slaapbeslissingen op het device.
   uint32_t nextWakeupMillis(uint32_t millis_now) const;
 
-  // afzender
-  struct AppSend { bool handled; bool transmit; bool cap_trailer; uint8_t attempt; uint32_t app_ack; };
-  AppSend onAppSend(const uint8_t pub_prefix[6], uint32_t ts, uint8_t attempt, const char* text, size_t text_len);
-  void    onAppTransmitted(const uint8_t pub_prefix[6], uint32_t ts, uint32_t est_timeout_ms);
+  // afzender: CMD_SEND_TXT_MSG. handled = false: geen outbox-bericht, de app-kant zendt het op de upstream-manier.
+  // sent = false met handled: de entry blijft in de outbox, die hem zendt (CUSTODY, ON_RADIO, radio bezet).
+  struct AppSend { bool handled; bool sent; uint32_t app_ack; uint32_t est_timeout_ms; };
+  AppSend appSend(const uint8_t pub_prefix[6], uint32_t ts, uint8_t attempt, const char* text, size_t text_len);
 
   // ontvangen (aangeroepen door RdmChatMesh)
   RecvDecision onPlainTxt(const uint8_t sender_pub[32], const uint8_t* data, size_t len, uint8_t path_len, int8_t snr_x4);
@@ -647,8 +650,9 @@ public:
   uint8_t listOutbox(OutEntry* out, uint8_t max, uint8_t offset = 0);   // vanaf entry offset (streamen zonder grote buffer)
 
 private:
-  FileIO&   _io;
-  NodeHost& _host;
+  FileIO&       _io;
+  NodeMeshHost& _mesh;
+  NodeAppSink&  _app;
 
   // OutboxHost
   void selfPub(uint8_t pub_out[32]) override;
@@ -677,26 +681,33 @@ private:
 }
 ```
 
-`NodeHost::rtcNow(trusted)`: `trusted` is alleen waar als de app sinds boot de tijd zette (`CMD_SET_DEVICE_TIME`) of er een hardware-RTC is. De klok die de companion bij boot uit de contacten afleidt (`bootstrapRTCfromContacts`, `examples/companion_radio/MyMesh.cpp:1000`) is niet betrouwbaar (`03` par. 11, G6).
+`NodeAppSink::rtcNow(trusted)`: `trusted` is alleen waar als de app sinds boot de tijd zette (`CMD_SET_DEVICE_TIME`) of er een hardware-RTC is. De klok die de companion bij boot uit de contacten afleidt (`bootstrapRTCfromContacts`, `examples/companion_radio/MyMesh.cpp:1000`) is niet betrouwbaar (`03` par. 11, G6).
 
 Slotaantallen per board (besluit WP6): T-Beam (ESP32, 4 MB) bouwt met `RDM_OUTBOX_SLOTS_MAX=8`, `RDM_WATCH_SLOTS_MAX=64`, `RDM_REGISTER_SLOTS_MAX=256`, `RDM_INBOX_SLOTS_MAX=128`, `RDM_CONTACT_SLOTS_MAX=32` (anders past DRAM niet; `Node` ~12 KB RAM); RAK met `RDM_WATCH_SLOTS_MAX=32`.
 
-De host-overrides staan in de header omdat `RdmChatMesh` een `rdm::Node` als member heeft; zonder deze declaraties is `Node` abstract. `test_rdm_headers` controleert dat met `std::is_abstract`.
+De host-overrides staan in de header omdat `RdmChatMesh` een `rdm::Node` als member heeft; zonder deze declaraties is `Node` abstract. `test_rdm_headers` controleert dat met `std::is_abstract`, en met `std::is_base_of` dat `RdmChatMesh` zelf geen host-interface is (AR3).
+
+`Node::appSend` is het companion-recept voor `CMD_SEND_TXT_MSG` (AR1/D29): de outbox beslist (`Outbox::onAppSend`), de plaintext krijgt de cap-trailer, gaat via `sendTxtPlain(flood = false)` en bij succes volgt de boekhouding van `Outbox::onAppTransmitted`. `handled == false` (K6, TOO_BIG, RDM uit): de app-kant zendt het bericht op de upstream-manier; bij K6 en TOO_BIG heeft `Node` dan al de status gepusht.
 
 ### 3.12 `mesh/RdmChatMesh.h` (integratielaag)
 
 ```cpp
 #include <helpers/BaseChatMesh.h>
+#include <helpers/rdm/RdmCodec.h>
 #include <helpers/rdm/RdmNode.h>
 
-class RdmChatMesh : public BaseChatMesh, protected rdm::NodeHost {
-public:
-  using BaseChatMesh::sendAnonReq;   // anders verbergt de NodeHost-override hem (besluit WP6)
-
+class RdmChatMesh : public BaseChatMesh {
 protected:
   RdmChatMesh(mesh::Radio& radio, mesh::MillisecondClock& ms, mesh::RNG& rng, mesh::RTCClock& rtc,
-              mesh::PacketManager& mgr, mesh::MeshTables& tables, rdm::FileIO& io);
+              mesh::PacketManager& mgr, mesh::MeshTables& tables, rdm::FileIO& io, rdm::NodeAppSink& app);
   rdm::Node& rdm();
+
+  // CMD_SEND_TXT_MSG: de outbox beslist, de DM gaat met cap-trailer. handled = false: geen outbox-bericht,
+  // zend het op de upstream-manier. De app krijgt RESP_CODE_SENT met app_ack en est_timeout_ms.
+  struct AppSend { bool handled; bool flood; uint32_t app_ack; uint32_t est_timeout_ms; };
+  AppSend rdmSendApp(const ContactInfo& to, uint32_t ts, uint8_t attempt, const char* text, size_t len);
+  // CMD_SYNC_NEXT_MESSAGE: elk verzoek bevestigt het record dat ervoor is overhandigd (03 par. 1c); false: inbox leeg
+  bool    rdmNextInbox(rdm::InRecord& out);
 
   // Mesh/BaseChatMesh-overrides
   int  searchPeersByHash(const uint8_t* hash) override;            // basis + verborgen peers achteraan
@@ -710,16 +721,26 @@ protected:
   void onAdvertRecv(mesh::Packet* pkt, const mesh::Identity& id, uint32_t ts, const uint8_t* app_data, size_t len) override;
   // K3: contact verwijderd omdat het een verborgen peer is; de app-kant meldt het aan de app en persisteert de contacten
   virtual void rdmOnContactRemoved(const ContactInfo& removed) {}
-
-  // NodeHost: mesh-kant (zenden, lookupContact via ContactInfo::isFav, millis, random32, txIdle, selfPub) hier;
-  // app-kant (pushUserStatus, pushSendConfirmed, pushMsgWaiting, rtcNow) blijft pure virtual voor MyMesh en de simulator
+  // Een plain DM is in de inbox opgeslagen (RecvResult::NEW): de UI-preview die upstream in onMessageRecv geeft (D60)
+  virtual void rdmOnMessageStored(mesh::Packet* pkt, ContactInfo& from, const rdm::codec::TxtParsed& p) {}
 
 private:
+  // Wat rdm::Node van de mesh ziet; zet door naar privé-methoden van RdmChatMesh. RdmChatMesh is zelf geen host:
+  // BaseChatMesh::sendAnonReq blijft zichtbaar voor de afgeleide klasse (AR3)
+  class MeshHost : public rdm::NodeMeshHost {
+    RdmChatMesh& _m;
+  public:
+    explicit MeshHost(RdmChatMesh& m) : _m(m) {}
+  };
+
+  MeshHost  _host;
   rdm::Node _rdm;
 };
 ```
 
-`MyMesh` erft onder `WITH_RELIABLE_DM` van `RdmChatMesh` in plaats van `BaseChatMesh`. De simulator-companion doet hetzelfde.
+`MyMesh` erft onder `WITH_RELIABLE_DM` van `RdmChatMesh` in plaats van `BaseChatMesh` en implementeert `rdm::NodeAppSink` privé (`rtcNow`, `pushUserStatus`, `pushSendConfirmed`, `pushMsgWaiting`); de constructor geeft `*this` als app-kant mee. De simulator-companion doet hetzelfde.
+
+`rdmSendApp` roept `Node::appSend` aan; blijft de DM in de outbox (`sent == false`), dan rekent `rdmSendApp` de `est_timeout_ms` uit die de app anders had gekregen (airtime van de datagramlengte die `Mesh::createDatagram` zou bouwen, via `calcFloodTimeoutMillisFor`/`calcDirectTimeoutMillisFor`), naast `sendToPeer` (R4). `flood` = `to.out_path_len == OUT_PATH_UNKNOWN`. `rdmNextInbox` doet `onSyncRequest`, `nextInboxFrame` en `onInboxFrameHanded` in één aanroep; omdat de companion synchroon antwoordt, is dat gelijk aan de eerdere volgorde met `onInboxFrameHanded` na het schrijven van het frame.
 
 ### 3.13 Wijzigingen in upstream-bestanden (onder flag)
 
@@ -741,15 +762,16 @@ private:
 #endif
 ```
 
-`RdmChatMesh.h` declareert de NodeHost-overrides van de mesh-kant in `protected` (besluit WP5). `RdmChatMesh` handelt `RECEIPT_QUERY` (0x45) zelf af in `onPeerDataRecv`, zodat companion en simulator dezelfde code delen; met RDM uit valt de REQ door naar `onContactRequest` (geen antwoord, zoals standaard). `sendTxtPlain`/`sendReq`: `flood = true` dwingt flood af, anders direct bij een bekend pad (contact of verborgen peer), anders flood. Bekende beperking v1: geen `handleReturnPathRetry` voor RDM-ACK's (`Node::onAck` meldt het contact niet), dus padherstel na een verloren reciprocal PATH gaat trager.
+`RdmChatMesh.h` houdt de mesh-kant van `rdm::NodeMeshHost` privé, achter de geneste adapter `MeshHost` (AR3; eerder een protected overerving, besluit WP5). `RdmChatMesh` handelt `RECEIPT_QUERY` (0x45) zelf af in `onPeerDataRecv`, zodat companion en simulator dezelfde code delen; met RDM uit valt de REQ door naar `onContactRequest` (geen antwoord, zoals standaard). `sendTxtPlain`/`sendReq`: `flood = true` dwingt flood af, anders direct bij een bekend pad (contact of verborgen peer), anders flood. Bekende beperking v1: geen `handleReturnPathRetry` voor RDM-ACK's (`Node::onAck` meldt het contact niet), dus padherstel na een verloren reciprocal PATH gaat trager.
 
 K3 (besluit K3): `RdmChatMesh::onAdvertRecv` geeft een advert van een verborgen peer alleen aan `rdm().onAdvert`, niet aan `BaseChatMesh::onAdvertRecv`. `onHiddenPeersChanged()` (door `Node` aangeroepen na `begin()` en bij elke wijziging van de verborgen peers) verwijdert contacten met de pubkey van een verborgen peer via `removeContact` en roept per contact `rdmOnContactRemoved`; `MyMesh` pusht dan `PUSH_CODE_CONTACT_DELETED` en slaat de contacten op.
 
-**Recept voor WP6** (uitgewerkt in `test/rdm_support/RdmSimCompanion.cpp`):
+**Recept voor de companion**: het recept staat in `Node::appSend`, `RdmChatMesh::rdmSendApp` en `RdmChatMesh::rdmNextInbox` (AR1/D29); `MyMesh`, `RdmSimCompanion` en `test/test_rdm_node/wire.h` roepen die aan in plaats van het na te bouwen. Wat de app-kant zelf doet:
 - `MyMesh` erft onder flag van `RdmChatMesh` en krijgt een extra constructorparameter `rdm::FileIO&`. `main.cpp` maakt een `ArduinoFileIO` op het bestandssysteem van de `DataStore` en geeft die mee. Zodra die constructor verandert, past dm-current `CompanionNode::createMesh` aan (H5: `SimFileIO` op `fs()`).
 - Volgorde bij opstarten: `store.begin()`, `begin()` van de mesh, contacten laden, daarna `rdm().begin()`; `rdm().loop()` in `loop()`.
-- `CMD_SEND_TXT_MSG`: `onAppSend`; bij `handled && transmit` de plaintext met trailer via `sendTxtPlain`, daarna `onAppTransmitted`; `RESP_CODE_SENT` met `app_ack`. `handled == false`: het upstream-pad.
-- `CMD_SYNC_NEXT_MESSAGE`: eerst `onSyncRequest`, daarna `nextInboxFrame`/`onInboxFrameHanded`, en pas als de inbox leeg is de gewone offline queue.
+- `CMD_SEND_TXT_MSG`: `rdmSendApp`; bij `handled` alleen `RESP_CODE_SENT` met `app_ack`, `flood` en `est_timeout_ms`. `handled == false`: het upstream-pad.
+- `CMD_SYNC_NEXT_MESSAGE`: `rdmNextInbox` tot `false`, en pas als de inbox leeg is de gewone offline queue.
+- UI-preview van een opgeslagen DM: `rdmOnMessageStored` (D60); `MyMesh` doet daar `markConnectionActive` en `Listener::onMessageRecv`.
 - `rtcNow(trusted)`: `trusted` alleen na `CMD_SET_DEVICE_TIME` sinds boot of met een hardware-RTC, niet na `bootstrapRTCfromContacts` (vlag in `MyMesh`; de simulator leest hem via H1).
 - Verbinding: `onClientConnected(rdm_client)` na `CMD_RDM_ENABLE` (0x91 alleen dan), `onClientDisconnected` bij verbreken.
 - App-pushes: `pushUserStatus` -> 0x91 (20 bytes, 3.14), `pushSendConfirmed` -> `PUSH_CODE_SEND_CONFIRMED`, `pushMsgWaiting` -> `PUSH_CODE_MSG_WAITING`.

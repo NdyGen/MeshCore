@@ -12,18 +12,15 @@
 
 namespace rdm {
 
-class NodeHost {
+// Mesh side of the node: time, randomness, contacts and sending (RdmChatMesh's adapter).
+class NodeMeshHost {
 public:
-  virtual ~NodeHost() {}
-  // time and randomness
+  virtual ~NodeMeshHost() {}
   virtual uint32_t millis() = 0;
-  virtual uint32_t rtcNow(bool& trusted) = 0;
   virtual uint32_t random32() = 0;
   virtual bool     txIdle() = 0;
   virtual void     selfPub(uint8_t pub_out[32]) = 0;       // own identity (self_id.pub_key)
-  // contacts
   virtual bool lookupContact(const uint8_t pub_prefix[6], uint8_t pub_out[32], bool& favourite, bool& has_path) = 0;
-  // sending (implemented by RdmChatMesh)
   virtual bool sendTxtPlain(const uint8_t pub_prefix[6], const uint8_t* plain, size_t len, bool flood, uint32_t& est_timeout_ms) = 0;
   virtual bool sendAck(const uint8_t pub_prefix[6], const uint8_t* ack, uint8_t len) = 0;
   virtual bool sendReq(const uint8_t peer_pub[32], uint32_t req_ts, const uint8_t* body, size_t len, bool flood,
@@ -33,12 +30,18 @@ public:
                                  uint8_t* payload_out, size_t& payload_len) = 0;
   virtual bool decryptTxtPayload(const uint8_t* payload, size_t len, uint8_t sender_pub_out[32],
                                  uint8_t* plain_out, size_t& plain_len) = 0;
-  // app side (companion or simulator)
+  // K3: the set of hidden peers (own mailbox, contacts' mailboxes) changed, also once after begin()
+  virtual void onHiddenPeersChanged() {}
+};
+
+// App side of the node: the companion (MyMesh) or the simulator.
+class NodeAppSink {
+public:
+  virtual ~NodeAppSink() {}
+  virtual uint32_t rtcNow(bool& trusted) = 0;
   virtual bool pushUserStatus(const uint8_t pub_prefix[6], uint32_t app_ack, UserStatus s, const uint8_t key[4], uint32_t ts) = 0;
   virtual bool pushSendConfirmed(uint32_t app_ack) = 0;
   virtual void pushMsgWaiting() = 0;
-  // K3: the set of hidden peers (own mailbox, contacts' mailboxes) changed, also once after begin()
-  virtual void onHiddenPeersChanged() {}
 };
 
 class Node : private OutboxHost, private InboxHost, private FetcherHost {
@@ -46,7 +49,7 @@ public:
   static constexpr uint16_t    MBX_RECORD_SIZE = 32 + 16;   // own mailbox: pubkey | K_owner
   static constexpr const char* MBX_PATH = "/rdm/mbx";
 
-  Node(FileIO& io, NodeHost& host);
+  Node(FileIO& io, NodeMeshHost& mesh, NodeAppSink& app);
   bool begin();                      // open files, slot counts from io.freeBytes(); false = RDM off
   bool enabled() const;
   void setEnabled(bool on);          // runtime off: exact upstream behaviour (scenario 10, stock Alice in the simulator)
@@ -56,10 +59,10 @@ public:
   // never late. For the simulator's fast-forward and for sleep decisions on the device.
   uint32_t nextWakeupMillis(uint32_t millis_now) const;
 
-  // sender
-  struct AppSend { bool handled; bool transmit; bool cap_trailer; uint8_t attempt; uint32_t app_ack; };
-  AppSend onAppSend(const uint8_t pub_prefix[6], uint32_t ts, uint8_t attempt, const char* text, size_t text_len);
-  void    onAppTransmitted(const uint8_t pub_prefix[6], uint32_t ts, uint32_t est_timeout_ms);
+  // sender: CMD_SEND_TXT_MSG. handled = false: not an outbox message, the app side sends it the upstream way.
+  // sent = false with handled: the entry stays in the outbox, which sends it (CUSTODY, ON_RADIO, radio busy).
+  struct AppSend { bool handled; bool sent; uint32_t app_ack; uint32_t est_timeout_ms; };
+  AppSend appSend(const uint8_t pub_prefix[6], uint32_t ts, uint8_t attempt, const char* text, size_t text_len);
 
   // receiving (called by RdmChatMesh)
   RecvDecision onPlainTxt(const uint8_t sender_pub[32], const uint8_t* data, size_t len, uint8_t path_len, int8_t snr_x4);
@@ -84,8 +87,9 @@ public:
   uint8_t listOutbox(OutEntry* out, uint8_t max, uint8_t offset = 0);   // entries offset.. (streaming, no big buffer)
 
 private:
-  FileIO&   _io;
-  NodeHost& _host;
+  FileIO&       _io;
+  NodeMeshHost& _mesh;
+  NodeAppSink&  _app;
 
   // Record files and modules are built in begin(), when the flash is mounted and slot counts can be derived
   // from its free space; in-place storage avoids the heap.

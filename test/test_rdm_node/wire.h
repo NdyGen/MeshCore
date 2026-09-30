@@ -33,7 +33,7 @@ class Net;
 
 struct StatusPush { uint32_t app_ack; UserStatus s; uint32_t ts; };
 
-class Peer : public NodeHost {
+class Peer : public NodeMeshHost, public NodeAppSink {
 public:
   Net& net;
   int id;
@@ -51,7 +51,7 @@ public:
   std::function<void(Peer& self, const Msg& m)> on_req;
 
   Peer(Net& n, int i, uint32_t capacity);
-  void boot() { node.reset(new Node(io, *this)); node->begin(); }
+  void boot() { node.reset(new Node(io, *this, *this)); node->begin(); }
   void reboot() { boot(); }
   const uint8_t* prefix() const { return pub; }
   Contact* contactOf(const uint8_t* prefix);
@@ -72,7 +72,7 @@ public:
   bool pushSendConfirmed(uint32_t app_ack) override { confirms.push_back(app_ack); return true; }
   void pushMsgWaiting() override { msg_waiting++; }
 
-  // what a companion does for CMD_SEND_TXT_MSG
+  // what a companion does for CMD_SEND_TXT_MSG: Node::appSend, or the upstream DM (no trailer) when not handled
   Node::AppSend appSend(Peer& to, const std::string& text, uint8_t attempt = 0, uint32_t ts = 0);
   // CMD_SYNC_NEXT_MESSAGE until empty; returns the texts handed to the app
   std::vector<std::string> appSync();
