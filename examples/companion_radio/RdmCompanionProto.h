@@ -41,6 +41,11 @@ constexpr size_t SET_MAILBOX_LEN    = 1 + 32 + 16;
 constexpr size_t SEND_CONFIRMED_LEN = 9;
 constexpr size_t MAX_APP_FRAME      = 176;   // MAX_FRAME_SIZE (BaseSerialInterface.h)
 
+// The byte helpers are rdm::put32/get32 (RdmBytes.h); these keep rdm::companion::put32 callers compiling and do
+// not make an unqualified call ambiguous next to `using namespace rdm`.
+using rdm::put32;
+using rdm::get32;
+
 // ---- PUSH_CODE_RDM_STATUS: 0x91 | app_ack(4) | UserStatus(1) | K(4) | ts(4) | pub_prefix(6) ----
 
 struct StatusPush {
