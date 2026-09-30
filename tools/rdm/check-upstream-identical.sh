@@ -35,8 +35,6 @@ while [ $# -gt 0 ]; do
 done
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
-TREE="$WORK/tree"
-LOG="$WORK/build.log"
 mkdir -p "$WORK"
 WORK="$(cd "$WORK" && pwd -P)"   # compile_commands.json uses resolved paths (/private/var on macOS)
 TREE="$WORK/tree"
@@ -47,23 +45,27 @@ git -C "$REPO" rev-parse --verify --quiet "$BASE^{commit}" >/dev/null || { echo 
 # GCC takes both from SOURCE_DATE_EPOCH, so both sides get the same value.
 export SOURCE_DATE_EPOCH="$(git -C "$REPO" log -1 --format=%ct "$BASE")"
 
-snapshot() {   # $1 = base|head
+stage_side() {   # $1 = base|head; one archive/rsync of the repo per side, into $WORK/stage-<side>
   local stage="$WORK/stage-$1"
-  rm -rf "$stage"; mkdir -p "$stage" "$TREE"
+  rm -rf "$stage"; mkdir -p "$stage"
   if [ "$1" = base ]; then
     git -C "$REPO" archive "$BASE" | tar -x -C "$stage"
   else
     rsync -a --exclude .pio --exclude .git --exclude .DS_Store "$REPO/" "$stage/"
   fi
+}
+
+install_side() {   # $1 = base|head; $WORK/stage-<side> becomes $TREE, the one directory both sides build in
+  mkdir -p "$TREE"
   # keep $TREE/.pio (libdeps, toolchain links) but never its build output
-  rsync -a --delete --exclude /.pio "$stage/" "$TREE/"
+  rsync -a --delete --exclude /.pio "$WORK/stage-$1/" "$TREE/"
   rm -rf "$TREE/.pio/build"
 }
 
 build_side() {   # $1 = base|head
   local side="$1" out="$WORK/$1"
   rm -rf "$out"; mkdir -p "$out"
-  snapshot "$side"
+  install_side "$side"
   for env in $ENVS; do
     echo "[$side] building $env"
     mkdir -p "$out/$env/obj" "$out/$env/pp" "$out/$env/img"
@@ -196,8 +198,8 @@ echo "envs: $ENVS"
 echo "work: $WORK (log: $LOG)"
 if [ $COMPARE_ONLY -eq 0 ]; then
   # stage both trees first, so the preprocessor step knows which sources differ
-  snapshot base
-  snapshot head
+  stage_side base
+  stage_side head
   build_side base
   build_side head
 fi
