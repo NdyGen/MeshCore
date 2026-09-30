@@ -44,8 +44,9 @@ TEST(RdmNode, SenderReachesDeliveredAndRecipientShowsOnce) {
   const uint32_t ts = p.net.epoch + 5;
   Node::AppSend a = p.bob.appSend(p.alice, "hello alice", 0, ts);
   ASSERT_TRUE(a.handled);
-  EXPECT_TRUE(a.transmit);
-  EXPECT_TRUE(a.cap_trailer);
+  EXPECT_TRUE(a.sent);
+  EXPECT_EQ(a.est_timeout_ms, 2000u) << "the wire's sendTxtPlain estimate";
+  EXPECT_EQ(p.net.log.back().bytes.size(), 5u + 11u + 3u) << "cap trailer";
   EXPECT_EQ(a.app_ack, upstreamExpectedAck(ts, 0, "hello alice", p.bob.pub)) << "standard app matches on this";
 
   p.net.pump();
@@ -60,7 +61,8 @@ TEST(RdmNode, SenderReachesDeliveredAndRecipientShowsOnce) {
   size_t txt = p.net.count(Kind::TXT, p.bob.id);
   Node::AppSend r = p.bob.appSend(p.alice, "hello alice", 1, ts);
   EXPECT_TRUE(r.handled);
-  EXPECT_FALSE(r.transmit);
+  EXPECT_FALSE(r.sent);
+  EXPECT_EQ(r.est_timeout_ms, 0u);
   EXPECT_EQ(p.net.count(Kind::TXT, p.bob.id), txt);
 
   EXPECT_EQ(p.alice.appSync(), std::vector<std::string>{"hello alice"});
@@ -135,8 +137,9 @@ TEST(RdmNode, RuntimeOffBehavesLikeUpstream) {
 
   Node::AppSend a = p.bob.appSend(p.alice, "plain");
   EXPECT_FALSE(a.handled);
-  EXPECT_FALSE(a.cap_trailer);
-  EXPECT_TRUE(a.transmit);
+  EXPECT_FALSE(a.sent);
+  EXPECT_EQ(p.net.count(Kind::TXT, p.bob.id), 1u) << "the upstream DM";
+  EXPECT_EQ(p.net.log.back().bytes.size(), 5u + 5u) << "no cap trailer";
   EXPECT_TRUE(p.bob.statuses.empty());
   p.net.pump();
   EXPECT_EQ(p.net.count(Kind::ACK), 0u) << "RdmChatMesh hands the DM to BaseChatMesh instead";
@@ -153,8 +156,9 @@ TEST(RdmNode, TooLongTextGoesUpstreamWithTooBigStatus) {
   Pair p;
   Node::AppSend a = p.bob.appSend(p.alice, std::string(MAX_TEXT + 1, 'x'));
   EXPECT_FALSE(a.handled);
-  EXPECT_FALSE(a.cap_trailer);
-  EXPECT_TRUE(a.transmit);
+  EXPECT_FALSE(a.sent);
+  EXPECT_EQ(p.net.count(Kind::TXT, p.bob.id), 1u) << "the upstream DM";
+  EXPECT_EQ(p.net.log.back().bytes.size(), 5u + MAX_TEXT + 1) << "no cap trailer";
   ASSERT_EQ(p.bob.statuses.size(), 1u);
   EXPECT_EQ(p.bob.statuses[0].s, UserStatus::TOO_BIG);
   EXPECT_EQ(p.bob.statuses[0].app_ack, a.app_ack);
@@ -273,7 +277,7 @@ TEST(RdmNode, SlotCountsFollowFreeFlashAndStayStableOverReboots) {
   Peer& tiny = net.add(RDM_MIN_FREE_BYTES - 1);
   tiny.boot();
   EXPECT_FALSE(tiny.node->enabled());
-  EXPECT_FALSE(tiny.node->onAppSend(tiny.pub, 1, 0, "x", 1).handled);
+  EXPECT_FALSE(tiny.node->appSend(tiny.pub, 1, 0, "x", 1).handled);
 
   Peer& small = net.add(64 * 1024);
   small.boot();

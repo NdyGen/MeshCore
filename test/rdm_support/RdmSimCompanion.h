@@ -1,8 +1,8 @@
 #pragma once
 
 // A fork companion in the simulator: RdmChatMesh (the same integration layer MyMesh uses under
-// WITH_RELIABLE_DM) on a SimNode, with the app side as direct calls instead of companion frames. The send and
-// sync recipes here are the ones MyMesh follows for CMD_SEND_TXT_MSG and CMD_SYNC_NEXT_MESSAGE.
+// WITH_RELIABLE_DM) on a SimNode, with the app side as direct calls instead of companion frames. CMD_SEND_TXT_MSG
+// and CMD_SYNC_NEXT_MESSAGE go through the same RdmChatMesh calls MyMesh uses.
 
 #include <ChatNode.h>
 #include <SimFileIO.h>

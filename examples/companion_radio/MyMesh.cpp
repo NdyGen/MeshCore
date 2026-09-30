@@ -903,7 +903,7 @@ void MyMesh::onSendTimeout() {}
 #ifdef WITH_RELIABLE_DM
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store,
                rdm::FileIO& rdm_io)
-    : RdmChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables, rdm_io),
+    : RdmChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables, rdm_io, *this),
 #else
 MyMesh::MyMesh(mesh::Radio &radio, mesh::RNG &rng, mesh::RTCClock &rtc, SimpleMeshTables &tables, DataStore& store)
     : BaseChatMesh(radio, *new ArduinoMillis(), rng, rtc, *new StaticPoolPacketManager(16), tables),
@@ -2500,46 +2500,28 @@ bool MyMesh::hasPendingWork() const {
 
 using namespace rdm::companion;
 
-// Plain DMs go through the outbox: the app keeps its own retries, they land on the same entry (I8), and the answer is
 // RESP_CODE_SENT with the ACK_R of this attempt. false: not an outbox message, send it the upstream way.
 bool MyMesh::rdmSendTxt(const ContactInfo& recipient, uint32_t ts, uint8_t attempt, const char* text, size_t len) {
-  rdm::Node::AppSend a = rdm().onAppSend(recipient.id.pub_key, ts, attempt, text, len);
+  AppSend a = rdmSendApp(recipient, ts, attempt, text, len);
   if (!a.handled) return false;
-
-  bool flood = recipient.out_path_len == OUT_PATH_UNKNOWN;
-  uint8_t plain[5 + rdm::MAX_TEXT + 3];
-  size_t n = rdm::codec::buildTxtPlain(plain, ts, TXT_TYPE_PLAIN, a.attempt, text, len, a.cap_trailer);
-  uint32_t est_timeout = 0;
-  // Entries in CUSTODY or ON_RADIO are not sent again; a DM that cannot go out now stays in the outbox, which sends it.
-  if (!a.transmit || n == 0 ||
-      !static_cast<rdm::NodeHost&>(*this).sendTxtPlain(recipient.id.pub_key, plain, n, false, est_timeout)) {
-    uint32_t t = _radio->getEstAirtimeFor(2 + 2 * PATH_HASH_SIZE + CIPHER_MAC_SIZE +
-                                          ((n + CIPHER_BLOCK_SIZE - 1) / CIPHER_BLOCK_SIZE) * CIPHER_BLOCK_SIZE);
-    est_timeout = flood ? calcFloodTimeoutMillisFor(t) : calcDirectTimeoutMillisFor(t, recipient.out_path_len);
-  } else {
-    rdm().onAppTransmitted(recipient.id.pub_key, ts, est_timeout);
-  }
   rdmNoteSent(a.app_ack);
 
   out_frame[0] = RESP_CODE_SENT;
-  out_frame[1] = flood ? 1 : 0;
+  out_frame[1] = a.flood ? 1 : 0;
   memcpy(&out_frame[2], &a.app_ack, 4);
-  memcpy(&out_frame[6], &est_timeout, 4);
+  memcpy(&out_frame[6], &a.est_timeout_ms, 4);
   _serial->writeFrame(out_frame, 10);
   return true;
 }
 
-// Every CMD_SYNC_NEXT_MESSAGE confirms the inbox record handed out before it (03 par. 1c); inbox records go first.
+// Inbox records go first; only with the inbox empty does the upstream offline queue get its turn.
 bool MyMesh::rdmSyncNext() {
-  rdm().onSyncRequest();
   rdm::InRecord rec;
-  uint16_t slot;
-  if (!rdm().nextInboxFrame(rec, slot)) {
+  if (!rdmNextInbox(rec)) {
     _rdm_unread = 0;
     return false;
   }
   _serial->writeFrame(out_frame, encodeContactMsg(out_frame, MAX_FRAME_SIZE, rec, app_target_ver));
-  rdm().onInboxFrameHanded(slot);
   if (_rdm_unread > 0) _rdm_unread--;
   if (_listener) _listener->onQueueSizeChanged(offline_queue_len + _rdm_unread);
   return true;
@@ -2667,7 +2649,7 @@ void MyMesh::onPeerDataRecv(mesh::Packet* pkt, uint8_t type, int sender_idx, con
   }
 }
 
-// ---- rdm::NodeHost, app side ----
+// ---- rdm::NodeAppSink ----
 
 uint32_t MyMesh::rtcNow(bool& trusted) {
   trusted = rtcTrusted();

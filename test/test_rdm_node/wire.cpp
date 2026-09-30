@@ -100,12 +100,12 @@ bool Peer::pushUserStatus(const uint8_t prefix[6], uint32_t app_ack, UserStatus 
 
 Node::AppSend Peer::appSend(Peer& to, const std::string& text, uint8_t attempt, uint32_t ts) {
   if (!ts) ts = net.epoch + net.ms / 1000;
-  Node::AppSend a = node->onAppSend(to.pub, ts, attempt, text.data(), text.size());
-  if (!a.transmit) return a;
+  Node::AppSend a = node->appSend(to.pub, ts, attempt, text.data(), text.size());
+  if (a.handled) return a;
   uint8_t plain[200];
-  size_t n = codec::buildTxtPlain(plain, ts, 0, a.attempt, text.data(), text.size(), a.cap_trailer);
+  size_t n = codec::buildTxtPlain(plain, ts, 0, attempt, text.data(), text.size(), false);
   uint32_t est = 0;
-  if (n && sendTxtPlain(to.pub, plain, n, false, est) && a.handled) node->onAppTransmitted(to.pub, ts, est);
+  if (n) sendTxtPlain(to.pub, plain, n, false, est);
   return a;
 }
 

@@ -95,7 +95,7 @@ struct AdvertPath {
   #define RDM_FRAME_QUEUE_SIZE  (RDM_OUTBOX_SLOTS_MAX + 8)   // a 0x91 replay of a full outbox plus live pushes
 #endif
 
-class MyMesh : public RdmChatMesh, public DataStoreHost {
+class MyMesh : public RdmChatMesh, public DataStoreHost, private rdm::NodeAppSink {
 #else
 #ifdef RDM_STATUS_CHANNEL
   #error "RDM_STATUS_CHANNEL needs WITH_RELIABLE_DM"
@@ -319,15 +319,16 @@ public:
 protected:
   void onPeerDataRecv(mesh::Packet* pkt, uint8_t type, int sender_idx, const uint8_t* secret, uint8_t* data,
                       size_t len) override;
-  // rdm::NodeHost, app side
+  void rdmOnContactRemoved(const ContactInfo& removed) override;   // a contact turned out to be a mailbox (K3)
+
+private:
+  // rdm::NodeAppSink
   uint32_t rtcNow(bool& trusted) override;
   bool pushUserStatus(const uint8_t pub_prefix[6], uint32_t app_ack, rdm::UserStatus s, const uint8_t key[4],
                       uint32_t ts) override;
   bool pushSendConfirmed(uint32_t app_ack) override;
   void pushMsgWaiting() override;
-  void rdmOnContactRemoved(const ContactInfo& removed) override;   // a contact turned out to be a mailbox (K3)
 
-private:
   bool rdmSendTxt(const ContactInfo& recipient, uint32_t ts, uint8_t attempt, const char* text, size_t len);
   bool rdmSyncNext();
   bool rdmHandleCmd(size_t len);

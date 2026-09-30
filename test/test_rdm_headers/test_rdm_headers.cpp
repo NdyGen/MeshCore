@@ -28,8 +28,11 @@ static_assert(4 + ((5 + MAX_TEXT_MAILBOX + 3 + 15) / 16) * 16 == MAX_INNER_PAYLO
 static_assert(sizeof(OutState) == 1 && sizeof(UserStatus) == 1 && sizeof(MbxCode) == 1, "one-byte enums");
 static_assert((uint8_t)UserStatus::NO_OUTBOX == 9 && (uint8_t)MbxCode::RATE_LIMITED == 0x15, "enum wire values");
 static_assert((uint8_t)MbxState::SYNC_EXPIRED == 6 && (uint8_t)ReportResult::INBOX_FULL == 4, "enum wire values");
-static_assert(std::is_abstract<RdmChatMesh>::value, "app side of NodeHost stays pure virtual");
-static_assert(!std::is_abstract<Node>::value, "Node implements all host interfaces");
+static_assert(std::is_abstract<NodeMeshHost>::value && std::is_abstract<NodeAppSink>::value, "node host interfaces");
+static_assert(!std::is_base_of<NodeMeshHost, RdmChatMesh>::value && !std::is_base_of<NodeAppSink, RdmChatMesh>::value,
+              "RdmChatMesh owns its mesh-side adapter and takes the app side by reference");
+static_assert(std::is_abstract<RdmChatMesh>::value, "BaseChatMesh app callbacks stay pure virtual");
+static_assert(!std::is_abstract<Node>::value, "Node implements all module host interfaces");
 static_assert(!std::is_abstract<MemFileIO>::value && !std::is_abstract<SimFileIO>::value, "FileIO test doubles");
 
 TEST(RdmTypes, UserStatusMapping) {

@@ -68,7 +68,7 @@ uint32_t get32(const uint8_t* p) {
 constexpr uint16_t    Node::MBX_RECORD_SIZE;
 constexpr const char* Node::MBX_PATH;
 
-Node::Node(FileIO& io, NodeHost& host) : _io(io), _host(host) {
+Node::Node(FileIO& io, NodeMeshHost& mesh, NodeAppSink& app) : _io(io), _mesh(mesh), _app(app) {
   memset(_own_mbx, 0, sizeof(_own_mbx));
   memset(_k_owner, 0, sizeof(_k_owner));
   memset(_hidden, 0, sizeof(_hidden));
@@ -132,7 +132,7 @@ bool Node::begin() {
   Fetcher& fetcher = _fetcher.make(inbox, static_cast<FetcherHost&>(*this));
 
   bool recreated = false;
-  if (!contacts.begin() || !inbox.begin(recreated) || !clock.begin(_host.millis(), recreated, _host.random32())) {
+  if (!contacts.begin() || !inbox.begin(recreated) || !clock.begin(_mesh.millis(), recreated, _mesh.random32())) {
     shutdown();
     return false;
   }
@@ -142,9 +142,9 @@ bool Node::begin() {
     shutdown();
     return false;
   }
-  fetcher.begin(t, clock.storeId(), _host.random32());
+  fetcher.begin(t, clock.storeId(), _mesh.random32());
   rebuildHiddenPeers();
-  _host.onHiddenPeersChanged();   // K3: contacts loaded before begin() may include a mailbox
+  _mesh.onHiddenPeersChanged();   // K3: contacts loaded before begin() may include a mailbox
   return true;
 }
 
@@ -154,8 +154,8 @@ void Node::setEnabled(bool on) { _enabled = on; }
 
 uint32_t Node::now() {
   bool trusted = false;
-  uint32_t rtc = _host.rtcNow(trusted);
-  _now = _clock.get().now(_host.millis(), rtc, trusted);
+  uint32_t rtc = _app.rtcNow(trusted);
+  _now = _clock.get().now(_mesh.millis(), rtc, trusted);
   return _now;
 }
 
@@ -164,7 +164,7 @@ void Node::loop() {
   uint32_t t = now();
   _outbox.get().loop(t);
   _fetcher.get().loop(t);
-  _clock.get().maybePersist(_host.millis(), false);
+  _clock.get().maybePersist(_mesh.millis(), false);
 }
 
 uint32_t Node::nextWakeupMillis(uint32_t millis_now) const {
@@ -180,14 +180,13 @@ uint32_t Node::nextWakeupMillis(uint32_t millis_now) const {
 
 // ---- sender ----
 
-Node::AppSend Node::onAppSend(const uint8_t pub_prefix[6], uint32_t ts, uint8_t attempt, const char* text,
-                              size_t text_len) {
+Node::AppSend Node::appSend(const uint8_t pub_prefix[6], uint32_t ts, uint8_t attempt, const char* text,
+                            size_t text_len) {
   AppSend a;
   a.handled = false;
-  a.transmit = true;
-  a.cap_trailer = false;
-  a.attempt = attempt;
+  a.sent = false;
   a.app_ack = 0;
+  a.est_timeout_ms = 0;
   if (!enabled()) return a;
 
   uint32_t t = now();
@@ -195,22 +194,24 @@ Node::AppSend Node::onAppSend(const uint8_t pub_prefix[6], uint32_t ts, uint8_t 
   Outbox::SendResult r = _outbox.get().onAppSend(pub_prefix, ts, attempt, text, text_len, t, a.app_ack, transmit);
   if (r == Outbox::SendResult::NEW_ENTRY || r == Outbox::SendResult::EXISTING_ENTRY) {
     a.handled = true;
-    a.transmit = transmit;
-    a.cap_trailer = true;
+    // Entries in CUSTODY or ON_RADIO are not sent again; the DM carries the cap trailer (I8, the app's own retries
+    // land on the same entry).
+    if (!transmit) return a;
+    uint8_t plain[5 + MAX_TEXT + 3];
+    size_t n = codec::buildTxtPlain(plain, ts, 0, attempt, text, text_len, true);
+    if (n && _mesh.sendTxtPlain(pub_prefix, plain, n, false, a.est_timeout_ms)) {
+      a.sent = true;
+      _outbox.get().onAppTransmitted(pub_prefix, ts, a.est_timeout_ms, now());
+    }
     return a;
   }
   // K6 and TOO_BIG: the DM still goes out the upstream way, the client learns why it has no outbox entry
   uint8_t self[32], key[4];
-  _host.selfPub(self);
+  _mesh.selfPub(self);
   crypto::key(key, ts, text, text_len, self);
-  _host.pushUserStatus(pub_prefix, a.app_ack, r == Outbox::SendResult::TOO_LONG ? UserStatus::TOO_BIG : UserStatus::NO_OUTBOX,
-                       key, ts);
+  _app.pushUserStatus(pub_prefix, a.app_ack, r == Outbox::SendResult::TOO_LONG ? UserStatus::TOO_BIG : UserStatus::NO_OUTBOX,
+                      key, ts);
   return a;
-}
-
-void Node::onAppTransmitted(const uint8_t pub_prefix[6], uint32_t ts, uint32_t est_timeout_ms) {
-  if (!enabled()) return;
-  _outbox.get().onAppTransmitted(pub_prefix, ts, est_timeout_ms, now());
 }
 
 // ---- receiving ----
@@ -251,7 +252,7 @@ void Node::onCtrlTxt(const uint8_t sender_pub[32], const uint8_t* data, size_t l
   uint8_t plain[codec::CTRL_INFO_LEN], ack[4];
   size_t plain_len = codec::buildCtrlPlain(plain, ts, info);
   crypto::ctrlAck(ack, plain, plain_len, sender_pub);
-  _host.sendAck(sender_pub, ack, 4);
+  _mesh.sendAck(sender_pub, ack, 4);
 
   uint32_t t = now();
   _outbox.get().onHeard(sender_pub, true, t);   // only a fork sends CTRL
@@ -271,7 +272,7 @@ void Node::onCtrlTxt(const uint8_t sender_pub[32], const uint8_t* data, size_t l
     *c = old;
     return;
   }
-  if (rebuildHiddenPeers()) _host.onHiddenPeersChanged();
+  if (rebuildHiddenPeers()) _mesh.onHiddenPeersChanged();
   _outbox.get().onMailboxChanged(sender_pub, t);
 }
 
@@ -348,7 +349,7 @@ void Node::onFetchResponse(const uint8_t* body, size_t len) {
     uint8_t sender[32], plain[MAX_INNER_PAYLOAD];
     size_t plain_len = sizeof(plain);
     codec::TxtParsed p;
-    if (!_host.decryptTxtPayload(inner, inner_len, sender, plain, plain_len) || !codec::parseTxtPlain(plain, plain_len, p) ||
+    if (!_mesh.decryptTxtPayload(inner, inner_len, sender, plain, plain_len) || !codec::parseTxtPlain(plain, plain_len, p) ||
         p.txt_type != 0 || p.text_len > INBOX_TEXT_MAX) {
       ib.onUndecryptable(hash);
     } else {
@@ -437,7 +438,7 @@ bool Node::setOwnMailbox(const uint8_t* mbx_pub, const uint8_t* k_owner) {
     return false;
   }
   _has_own_mbx = set;
-  if (rebuildHiddenPeers()) _host.onHiddenPeersChanged();
+  if (rebuildHiddenPeers()) _mesh.onHiddenPeersChanged();
   if (!enabled()) return true;
 
   // Who must hear about it: contacts that acknowledged an MBX_INFO, and contacts with one still on its way (its
@@ -463,7 +464,7 @@ bool Node::setOwnMailbox(const uint8_t* mbx_pub, const uint8_t* k_owner) {
   for (uint16_t k = 0; k < n_targets; k++) {
     uint8_t pub[32];
     bool fav = false, path = false;
-    if (!_host.lookupContact(targets[k], pub, fav, path) || !fav) continue;
+    if (!_mesh.lookupContact(targets[k], pub, fav, path) || !fav) continue;
     uint8_t plain[codec::CTRL_INFO_LEN];
     size_t n = buildMbxCtrl(plain, pub);
     if (n) ob.addCtrl(targets[k], plain, n, t);
@@ -498,14 +499,14 @@ size_t Node::buildMbxCtrl(uint8_t* out, const uint8_t contact_pub[32]) {
     info.sub = CTRL_MBX_REVOKE;
   }
   bool trusted = false;
-  return codec::buildCtrlPlain(out, _host.rtcNow(trusted), info);
+  return codec::buildCtrlPlain(out, _app.rtcNow(trusted), info);
 }
 
 void Node::maybeSendMbxInfo(const uint8_t sender_pub[32]) {
   if (!_has_own_mbx) return;
   uint8_t pub[32];
   bool fav = false, path = false;
-  if (!_host.lookupContact(sender_pub, pub, fav, path) || !fav) return;
+  if (!_mesh.lookupContact(sender_pub, pub, fav, path) || !fav) return;
   const ContactRdm* c = _contacts.get().find(sender_pub);
   if (c && (c->flags & CR_MBX_INFO_SENT)) return;
   uint8_t plain[codec::CTRL_INFO_LEN];
@@ -576,8 +577,8 @@ bool Node::sendTracked(uint8_t kind, const uint8_t peer_pub[32], const uint8_t* 
   bool to_mailbox = kind != REQ_QUERY;
   if (to_mailbox && !reqAllowed(peer_pub)) return false;
   bool trusted = false;
-  uint32_t tag = _clock.get().nextReqTimestamp(_host.rtcNow(trusted));
-  if (!_host.sendReq(peer_pub, tag, body, len, flood, est_timeout_ms)) return false;
+  uint32_t tag = _clock.get().nextReqTimestamp(_app.rtcNow(trusted));
+  if (!_mesh.sendReq(peer_pub, tag, body, len, flood, est_timeout_ms)) return false;
   if (to_mailbox) noteReq(peer_pub);
   Pending* p = addPending(kind, tag, peer_pub);
   if (out) *out = p;
@@ -586,28 +587,28 @@ bool Node::sendTracked(uint8_t kind, const uint8_t peer_pub[32], const uint8_t* 
 
 // ---- OutboxHost ----
 
-void Node::selfPub(uint8_t pub_out[32]) { _host.selfPub(pub_out); }
+void Node::selfPub(uint8_t pub_out[32]) { _mesh.selfPub(pub_out); }
 
-uint32_t Node::random32() { return _host.random32(); }
+uint32_t Node::random32() { return _mesh.random32(); }
 
 bool Node::contactPub(const uint8_t pub_prefix[6], uint8_t pub_out[32]) {
   bool fav = false, path = false;
-  return _host.lookupContact(pub_prefix, pub_out, fav, path);
+  return _mesh.lookupContact(pub_prefix, pub_out, fav, path);
 }
 
 bool Node::hasDirectPath(const uint8_t pub_prefix[6]) {
   uint8_t pub[32];
   bool fav = false, path = false;
-  return _host.lookupContact(pub_prefix, pub, fav, path) && path;
+  return _mesh.lookupContact(pub_prefix, pub, fav, path) && path;
 }
 
-bool Node::txIdle() { return _host.txIdle(); }
+bool Node::txIdle() { return _mesh.txIdle(); }
 
 bool Node::sendDm(const OutEntry& e, uint8_t attempt, bool flood, uint32_t& est_timeout_ms) {
   uint8_t plain[5 + MAX_TEXT + 3];
   size_t n = (e.flags & OF_CTRL) ? codec::ctrlPlainFromBody(plain, e.ts, (const uint8_t*)e.text, e.text_len)
                                  : codec::buildTxtPlain(plain, e.ts, 0, attempt, e.text, e.text_len, true);
-  return n && _host.sendTxtPlain(e.pub_prefix, plain, n, flood, est_timeout_ms);
+  return n && _mesh.sendTxtPlain(e.pub_prefix, plain, n, flood, est_timeout_ms);
 }
 
 bool Node::sendReceiptQuery(const uint8_t pub_prefix[6], const QueryItem* q, uint8_t n, bool flood,
@@ -628,7 +629,7 @@ bool Node::sendDeposit(const OutEntry& e, uint8_t attempt, uint8_t pkt_hash_out[
   uint8_t plain[5 + MAX_TEXT + 3], inner[MAX_INNER_PAYLOAD + 16];
   size_t n = codec::buildTxtPlain(plain, e.ts, 0, attempt, e.text, e.text_len, true);
   size_t inner_len = sizeof(inner);
-  if (!n || !_host.encryptTxtPayload(e.pub_prefix, plain, n, inner, inner_len) || inner_len > MAX_INNER_PAYLOAD) return false;
+  if (!n || !_mesh.encryptTxtPayload(e.pub_prefix, plain, n, inner, inner_len) || inner_len > MAX_INNER_PAYLOAD) return false;
   crypto::txtPacketHash(pkt_hash_out, inner, inner_len);
   uint8_t body[1 + 4 + 1 + MAX_INNER_PAYLOAD];
   size_t len = codec::buildDeposit(body, e.pub_prefix, inner, (uint8_t)inner_len);
@@ -654,10 +655,10 @@ bool Node::sendRegister(const uint8_t pub_prefix[6], uint32_t& est_timeout_ms) {
   uint8_t mbx[32], token[8];
   if (!contactMailbox(pub_prefix, mbx, token) || !reqAllowed(mbx)) return false;
   bool trusted = false;
-  uint32_t tag = _clock.get().nextReqTimestamp(_host.rtcNow(trusted));
+  uint32_t tag = _clock.get().nextReqTimestamp(_app.rtcNow(trusted));
   uint8_t plain[32];
   size_t len = codec::buildRegReq(plain, tag, pub_prefix, token);
-  if (!len || !_host.sendAnonReq(mbx, plain, len, est_timeout_ms)) return false;
+  if (!len || !_mesh.sendAnonReq(mbx, plain, len, est_timeout_ms)) return false;
   noteReq(mbx);
   Pending* p = addPending(REQ_REGISTER, tag, mbx);
   memcpy(p->contact, pub_prefix, 6);
@@ -665,16 +666,16 @@ bool Node::sendRegister(const uint8_t pub_prefix[6], uint32_t& est_timeout_ms) {
 }
 
 bool Node::pushUserStatus(const OutEntry& e, UserStatus s) {
-  return _host.pushUserStatus(e.pub_prefix, e.app_ack, s, e.key, e.ts);
+  return _app.pushUserStatus(e.pub_prefix, e.app_ack, s, e.key, e.ts);
 }
 
-bool Node::pushSendConfirmed(const OutEntry& e) { return _host.pushSendConfirmed(e.app_ack); }
+bool Node::pushSendConfirmed(const OutEntry& e) { return _app.pushSendConfirmed(e.app_ack); }
 
 // ---- InboxHost ----
 
-void Node::onInboxChanged() { _host.pushMsgWaiting(); }
+void Node::onInboxChanged() { _app.pushMsgWaiting(); }
 
-bool Node::sendAckS(const uint8_t sender_prefix[6], const uint8_t ack_s[6]) { return _host.sendAck(sender_prefix, ack_s, 6); }
+bool Node::sendAckS(const uint8_t sender_prefix[6], const uint8_t ack_s[6]) { return _mesh.sendAck(sender_prefix, ack_s, 6); }
 
 void Node::onReportQueued() {
   if (_fetcher.live()) _fetcher.get().onReportQueued(_now);
