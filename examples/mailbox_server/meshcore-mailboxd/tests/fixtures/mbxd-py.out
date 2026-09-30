@@ -1,3 +1,4 @@
+mbx.hello?
 mbx.reg 1 00 3 5
 mbx.reg 2 00 3 5
 mbx.store 3 00 1790259200
