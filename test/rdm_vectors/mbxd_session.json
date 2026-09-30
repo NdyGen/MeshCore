@@ -1,0 +1,202 @@
+{
+  "version": 1,
+  "description": "Session protocol v2 between the mailbox radio and meshcore-mailboxd, line by line (06-implementatieplan-v1.md par. 3.16). Run by test/test_rdm_mailbox_core/test_serial_pi_backend.cpp (radio side) and the golden fixtures of examples/mailbox_server/meshcore-mailboxd (daemon side).",
+  "format": {
+    "step": "either an event {op, t, args} on one side, or a line step {from: pi|radio, lines: [...]}: the side named by `from` must have sent exactly these lines (without the newline) since its previous line step; the other side receives them as input. A consumer plays one side: it checks its own line steps and feeds the other side's.",
+    "players": "which side can play the case, default [\"pi\", \"radio\"]; a case is skipped by a consumer that is not listed",
+    "t": "daemon clock in seconds (unix time) from this event on; the radio side ignores it",
+    "pi_start": "the daemon process starts (fake clock at t) and sends mbx.hello?; before its first pi_start the daemon is off and radio lines are lost",
+    "owner_add": "CLI in another process: args pub(32 hex), k_owner(16 hex), ttl_days, sync_days, quota; the running daemon then pushes the ACL series",
+    "deny": "CLI: args owner(4 hex), pub(32 hex); drops the depositor's registration, then an ACL push",
+    "undeny": "CLI: args owner(4 hex), pub(32 hex); the depositor has to register again, then an ACL push",
+    "radio_boot": "the radio boots (fresh SerialPiBackend, begin(fw)); args fw; before its first radio_boot the radio is off and pi lines are lost",
+    "radio_ms": "the radio's millis() advances by args.ms and the radio polls",
+    "radio_reg": "MailboxCore asks the backend to register: args id, sender(32 hex), owner(4 hex), token(8 hex)",
+    "assert_radio": "radio-side state, every field optional: ready (bool), daemon_proto (int, 0 = none seen), time (backendTime()), acl (drains the ACL queue: [[pub, o|d, owner4], ...]), replies (drains the reply queue: [{kind, id, code, ttl_days?, quota?}, ...]); the daemon side ignores this op"
+  },
+  "cases": [
+    {
+      "name": "radio_boots_into_running_daemon",
+      "doc": "The radio starts after the daemon: HELLO 2 is answered with the ACL, mbx.ready 2 and mbx.time. The mbx.hello? that the daemon sent at its start hit a radio that was off.",
+      "steps": [
+        {"op": "owner_add", "t": 1790000000, "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"op": "pi_start", "t": 1790000000},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"op": "radio_boot", "args": {"fw": "1.0-rdm"}},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2", "mbx.time 1790000000"]},
+        {"op": "assert_radio", "ready": true, "daemon_proto": 2, "time": 1790000000, "acl": [["535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "o", "535b31db"]]},
+        {"from": "radio", "lines": []}
+      ]
+    },
+    {
+      "name": "daemon_starts_after_radio",
+      "doc": "The radio repeats HELLO every 30 s while it waits; the daemon's mbx.hello? at start gets a HELLO at once, and after mbx.ready 2 the repetition stops.",
+      "steps": [
+        {"op": "owner_add", "t": 1790000000, "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"op": "radio_boot", "args": {"fw": "1.0-rdm"}},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"op": "assert_radio", "ready": false, "daemon_proto": 0},
+        {"op": "radio_ms", "args": {"ms": 29999}},
+        {"from": "radio", "lines": []},
+        {"op": "radio_ms", "args": {"ms": 1}},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"op": "pi_start", "t": 1790000040},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2", "mbx.time 1790000040"]},
+        {"op": "assert_radio", "ready": true, "daemon_proto": 2, "time": 1790000040},
+        {"op": "radio_ms", "args": {"ms": 60000}},
+        {"from": "radio", "lines": []}
+      ]
+    },
+    {
+      "name": "hello_query_while_ready",
+      "doc": "A daemon restart sends mbx.hello? to a radio that is already ready: the radio answers HELLO, stays ready, and takes the new ACL series.",
+      "steps": [
+        {"op": "owner_add", "t": 1790000000, "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"op": "pi_start", "t": 1790000000},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"op": "radio_boot", "args": {"fw": "1.0-rdm"}},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2", "mbx.time 1790000000"]},
+        {"op": "assert_radio", "ready": true, "acl": [["535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "o", "535b31db"]]},
+        {"op": "pi_start", "t": 1790000100},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"op": "assert_radio", "ready": true},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2", "mbx.time 1790000100"]},
+        {"op": "assert_radio", "ready": true, "daemon_proto": 2, "time": 1790000100, "acl": [["535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "o", "535b31db"]]},
+        {"op": "radio_ms", "args": {"ms": 60000}},
+        {"from": "radio", "lines": []}
+      ]
+    },
+    {
+      "name": "acl_push_after_owner_add",
+      "doc": "owner-add in another process: the running daemon pushes the whole ACL again (owners in creation order) plus mbx.ready 2, without mbx.time; the radio needs no restart and stays ready.",
+      "steps": [
+        {"op": "owner_add", "t": 1790000000, "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"op": "pi_start", "t": 1790000000},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"op": "radio_boot", "args": {"fw": "1.0-rdm"}},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2", "mbx.time 1790000000"]},
+        {"op": "assert_radio", "ready": true, "acl": [["535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "o", "535b31db"]]},
+        {"op": "owner_add", "t": 1790000300, "args": {"pub": "f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "k_owner": "34d1e0a76277659334b8560a940f1b62", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.acl f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5 o f36ab03b", "mbx.ready 2"]},
+        {"from": "radio", "lines": []},
+        {"op": "assert_radio", "ready": true, "daemon_proto": 2, "time": 1790000000, "acl": [["535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "o", "535b31db"], ["f36ab03bc0785d0129d39c7507f90615006eae1e1f0f6a5ce9d41df8d778f8a5", "o", "f36ab03b"]]}
+      ]
+    },
+    {
+      "name": "registration_deny_and_undeny_in_the_acl",
+      "doc": "A registered depositor appears as role d after the owners; deny drops it and pushes the ACL; undeny pushes the ACL again but the depositor stays out until it registers again.",
+      "steps": [
+        {"op": "owner_add", "t": 1790000000, "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"op": "pi_start", "t": 1790000000},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"op": "radio_boot", "args": {"fw": "1.0-rdm"}},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2", "mbx.time 1790000000"]},
+        {"op": "assert_radio", "ready": true, "acl": [["535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "o", "535b31db"]]},
+        {"op": "radio_reg", "t": 1790000010, "args": {"id": 1, "sender": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "owner": "535b31db", "token": "dd052b2f712e4782"}},
+        {"from": "radio", "lines": ["@MBX REG 1 ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d 535b31db dd052b2f712e4782"]},
+        {"from": "pi", "lines": ["mbx.reg 1 00 7 20"]},
+        {"op": "assert_radio", "ready": true, "acl": [], "replies": [{"kind": "reg", "id": 1, "code": 0, "ttl_days": 7, "quota": 20}]},
+        {"op": "pi_start", "t": 1790000020},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.acl ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d d 535b31db", "mbx.ready 2", "mbx.time 1790000020"]},
+        {"op": "assert_radio", "ready": true, "acl": [["535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "o", "535b31db"], ["ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d", "d", "535b31db"]]},
+        {"op": "deny", "t": 1790000030, "args": {"owner": "535b31db", "pub": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d"}},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2"]},
+        {"op": "assert_radio", "ready": true, "acl": [["535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "o", "535b31db"]]},
+        {"op": "undeny", "t": 1790000040, "args": {"owner": "535b31db", "pub": "ee88dfb37c4ca654c2279979fcd5400fd8ea9539fe252876868798ab06caf14d"}},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2"]},
+        {"from": "radio", "lines": []},
+        {"op": "assert_radio", "ready": true, "acl": [["535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "o", "535b31db"]]}
+      ]
+    },
+    {
+      "name": "hello_without_protocol_is_a_mismatch",
+      "doc": "The v1 form (no protocol field, with or without a firmware version) is protocol 1: the daemon logs once and answers only mbx.ready 2, no ACL, no mbx.time. A later HELLO 2 gets the full series.",
+      "players": ["pi"],
+      "steps": [
+        {"op": "owner_add", "t": 1790000000, "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"op": "pi_start", "t": 1790000000},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"from": "radio", "lines": ["@MBX HELLO 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.ready 2"]},
+        {"from": "radio", "lines": ["@MBX HELLO"]},
+        {"from": "pi", "lines": ["mbx.ready 2"]},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2", "mbx.time 1790000000"]}
+      ]
+    },
+    {
+      "name": "hello_with_other_protocol_is_a_mismatch",
+      "doc": "A radio that speaks another version gets only mbx.ready 2; the firmware field is informational and may be absent.",
+      "players": ["pi"],
+      "steps": [
+        {"op": "owner_add", "t": 1790000000, "args": {"pub": "535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "k_owner": "cb0aaa6155edfbb4729d4853fa5ee2bf", "ttl_days": 7, "sync_days": 30, "quota": 20}},
+        {"op": "pi_start", "t": 1790000000},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"from": "radio", "lines": ["@MBX HELLO 3 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.ready 2"]},
+        {"from": "radio", "lines": ["@MBX HELLO 3"]},
+        {"from": "pi", "lines": ["mbx.ready 2"]},
+        {"from": "radio", "lines": ["@MBX HELLO 2"]},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2", "mbx.time 1790000000"]}
+      ]
+    },
+    {
+      "name": "ready_with_other_version_keeps_radio_waiting",
+      "doc": "mbx.ready 3 does not make the radio ready; it remembers the daemon's version, stops repeating HELLO and waits for the next mbx.hello? (after a daemon upgrade).",
+      "players": ["radio"],
+      "steps": [
+        {"op": "radio_boot", "args": {"fw": "1.0-rdm"}},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.ready 3"]},
+        {"op": "assert_radio", "ready": false, "daemon_proto": 3},
+        {"op": "radio_ms", "args": {"ms": 60000}},
+        {"from": "radio", "lines": []},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"op": "assert_radio", "ready": false, "daemon_proto": 3},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready 2", "mbx.time 1790000000"]},
+        {"op": "assert_radio", "ready": true, "daemon_proto": 2, "time": 1790000000, "acl": [["535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322", "o", "535b31db"]]}
+      ]
+    },
+    {
+      "name": "ready_without_version_is_protocol_1",
+      "doc": "An old daemon answers a bare mbx.ready: protocol 1, the radio is not ready and does not repeat HELLO.",
+      "players": ["radio"],
+      "steps": [
+        {"op": "radio_boot", "args": {"fw": "1.0-rdm"}},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.acl 535b31dbce06d4ec40156997b28639a3262fa5de1df65e473b2a84fa91764322 o 535b31db", "mbx.ready", "mbx.time 1790000000"]},
+        {"op": "assert_radio", "ready": false, "daemon_proto": 1, "time": 1790000000},
+        {"op": "radio_ms", "args": {"ms": 60000}},
+        {"from": "radio", "lines": []},
+        {"from": "pi", "lines": ["mbx.hello?"]},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.ready 2"]},
+        {"op": "assert_radio", "ready": true, "daemon_proto": 2}
+      ]
+    },
+    {
+      "name": "malformed_session_lines_are_ignored",
+      "doc": "mbx.hello? matches exactly; mbx.ready takes at most one decimal field. Anything else is dropped and the radio keeps waiting.",
+      "players": ["radio"],
+      "steps": [
+        {"op": "radio_boot", "args": {"fw": "1.0-rdm"}},
+        {"from": "radio", "lines": ["@MBX HELLO 2 1.0-rdm"]},
+        {"from": "pi", "lines": ["mbx.hello?x", "mbx.hello? ", "mbx.hello", "mbx.ready x", "mbx.ready 2 2", "mbx.ready  2", "mbx.ready -2"]},
+        {"from": "radio", "lines": []},
+        {"op": "assert_radio", "ready": false, "daemon_proto": 0},
+        {"from": "pi", "lines": ["mbx.ready 2"]},
+        {"op": "assert_radio", "ready": true, "daemon_proto": 2}
+      ]
+    }
+  ]
+}

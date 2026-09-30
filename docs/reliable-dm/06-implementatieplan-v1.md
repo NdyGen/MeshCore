@@ -754,7 +754,7 @@ public:
   virtual bool stat(uint32_t id, const uint8_t sender_pub[32], const uint8_t (*hashes)[8], uint8_t n) = 0;
   virtual bool poll(BackendReply& out) = 0;                                    // niet-blokkerend
   virtual bool pollAcl(uint8_t pub_out[32], bool& is_owner, uint8_t owner_out[4]) = 0;   // cache vullen na boot
-  virtual bool ready() = 0;                                                    // mbx.ready ontvangen
+  virtual bool ready() = 0;                                                    // mbx.ready met de eigen protocolversie ontvangen
   virtual uint32_t backendTime() = 0;                                          // Pi-unixtijd nu (laatste mbx.time + verstreken); 0 = onbekend
 };
 
@@ -782,30 +782,40 @@ public:
 
 Regels in `MailboxCore` (aangevuld na WP7): een REQ of registratie via flood krijgt een PATH-return, anders gaat het antwoord direct (`via_flood`); rate-limited FETCH/STATUS en ANON boven de globale limiet krijgen geen antwoord, DEPOSIT/REG wel (RATE_LIMITED); backend niet ready: DEPOSIT/REG direct NO_STORAGE, FETCH/STATUS niets; maximaal 4 antwoorden in de wachtrij, één per loop bij een lege zendwachtrij, 300 ms vertraging; peer-cache LRU 64 met onbevestigde ANON-afzenders eerst verdrongen. `MailboxMesh` forwardt niets, adverteert als `ADV_TYPE_ROOM` 30 s na boot en elke 12 u (flood) en decodeert base64 strikt. Een FETCH via flood gaat met `FETCH_FLAG_NO_PAYLOAD` naar de backend, zodat geen kopie op SENT komt die nooit verzonden wordt (WP8); `tijd_M` in het registratieantwoord is `backendTime()`; RATE_LIMITED komt alleen uit `MailboxCore`, nooit uit `mbxd`; replaycheck `ts < last_ts` per client (RAM); 1 REQ per 5 s en 60 per uur per client; ANON_REQ globaal 4 per minuut; FETCH via flood krijgt een PATH-return met `resterend` maar zonder kopie; DEPOSIT groter dan 164 bytes inner geeft TOO_BIG zonder backend-aanroep.
 
-### 3.16 Regelprotocol radio <-> `mbxd`
+### 3.16 Regelprotocol radio <-> `meshcore-mailboxd` (sessieprotocol v2)
 
-115200 baud, regels eindigen op `\n`, velden gescheiden door één spatie, hex in kleine letters, base64 met padding. Andere regels (debug-output) negeert `mbxd`. De radio leest regels die beginnen met `mbx.` in een buffer van 400 bytes.
+115200 baud, regels eindigen op `\n`, velden gescheiden door één spatie, hex in kleine letters, base64 met padding. Regels die niet met `@MBX ` beginnen (debug-output van de radio) negeert de daemon; de radio leest alleen regels die met `mbx.` beginnen, in een buffer van 400 bytes. `PROTO` = 2 is de versie van dit sessieprotocol; beide kanten noemen hun versie bij het opzetten van de sessie.
 
 | richting | regel |
 |---|---|
-| radio -> Pi | `@MBX HELLO <fw_versie>` bij boot |
+| Pi -> radio | `mbx.hello?` ongevraagd bij de start van de daemon; de radio antwoordt altijd met `@MBX HELLO`, ook als hij al ready is |
+| radio -> Pi | `@MBX HELLO <proto> <fw_versie>` bij boot, als antwoord op `mbx.hello?` en elke 30 s zolang de radio op `mbx.ready` wacht; `proto` = 2, decimaal; `fw_versie` is informatief (log van de daemon) en mag ontbreken |
 | radio -> Pi | `@MBX STORE <id> <owner4hex> <sender32hex> <hash8hex> <payload_b64>` |
 | radio -> Pi | `@MBX REG <id> <sender32hex> <owner4hex> <token8hex>` |
 | radio -> Pi | `@MBX FETCH <id> <client32hex> <flags2hex> <store_id8hex> <rapporten>`, rapporten = `-` of `<hash8hex>:<result>:<ack12hex>` gescheiden door komma's |
 | radio -> Pi | `@MBX STAT <id> <sender32hex> <hash8hex>[,<hash8hex>...]` |
-| Pi -> radio | `mbx.acl <pub32hex> <o|d> <owner4hex>` (na HELLO, eigenaren eerst, max 64), daarna `mbx.ready` |
+| Pi -> radio | `mbx.acl <pub32hex> <o|d> <owner4hex>` na elke HELLO en na elke ACL-wijziging (eigenaren eerst, max 64), gevolgd door `mbx.ready <proto>` |
+| Pi -> radio | `mbx.ready <proto>` sluit een ACL-reeks af; `proto` = 2. Zonder veld telt de regel als protocol 1 (de vorm van v1) |
+| Pi -> radio | `mbx.time <unix>` na de `mbx.ready` die op een HELLO volgt en daarna elke 600 s; de radio gebruikt die voor `ttl_s` en `tijd_M` |
 | Pi -> radio | `mbx.store <id> <code2hex> <expires>` pas na `COMMIT` met `synchronous=FULL`; `expires` is absolute Pi-tijd |
-| Pi -> radio | `mbx.time <unix>` na `mbx.ready` en daarna elke 600 s; de radio gebruikt die voor `ttl_s` en `tijd_M` |
-| radio -> Pi (alleen test) | `@MBX TIME <unix>` zet de klok van `mbxd serve --stdio --fake-clock`; zonder die vlag genegeerd |
 | Pi -> radio | `mbx.reg <id> <code2hex> <ttl_dagen> <quota>` |
 | Pi -> radio | `mbx.fetch <id> <code2hex> <resterend> <rapporten_ok> <payload_b64 of ->` |
 | Pi -> radio | `mbx.stat <id> <code2hex> <state>:<ack12hex>[,...]` |
+| radio -> Pi (alleen test) | `@MBX TIME <unix>` zet de klok van `meshcore-mailboxd serve --stdio --fake-clock`; zonder die vlag genegeerd |
 
-`id` is een 32-bit teller van de radio (decimaal). `mbxd` verwerkt regels strikt op volgorde. Toestanden, TTL, quotum, token, denylist en RESYNC volgen `03` par. 4 en 11; de conformance-vectoren en `examples/mailbox_server/mbxd/README.md` leggen de details vast en zijn daarin normatief (WP8): quotum telt STORED, SENT en ON_RADIO; controlevolgorde TOO_BIG, UNKNOWN_OWNER, NOT_AUTH, ALREADY_STORED, QUOTA; ALREADY_STORED alleen bij dezelfde afzender en owner; elk rapport telt in `rapporten_ok`; STAT toont alleen eigen berichten; foutieve regels krijgen geen antwoord (de radio valt na 3 s terug op NO_STORAGE). Een nieuwe owner zit pas na een herstart van `mbxd` in de ACL van de radio.
+Sessie-opbouw. Beide kanten kunnen beginnen: de radio stuurt `@MBX HELLO` bij boot, de daemon stuurt `mbx.hello?` bij zijn start. Op elke HELLO met `proto` = 2 antwoordt de daemon met de volledige reeks: de ACL, `mbx.ready 2` en `mbx.time`. Een dubbele HELLO (de radio zag bijvoorbeeld zowel zijn boot als een `mbx.hello?`) krijgt de reeks nog eens; dat is onschadelijk. Zolang de radio nog geen `mbx.ready` heeft ontvangen, herhaalt hij HELLO elke 30 s als vangnet voor een verloren regel. Een `mbx.hello?` verandert de toestand van de radio niet: is hij ready, dan blijft hij dat en bevestigt de `mbx.ready 2` die volgt dat opnieuw. Of de radio reset wanneer de daemon de poort opent, doet er niet toe: beide startvolgorden leiden tot een sessie. Verzoeken (STORE, REG, FETCH, STAT) verwerkt de daemon onafhankelijk van de sessietoestand; de radio stuurt ze pas als hij ready is (par. 3.15).
 
-### 3.17 Conformance-vectoren
+ACL-wijziging. `owner-add`, `deny` en `undeny` draaien als CLI in een ander proces. De draaiende daemon stuurt daarna opnieuw de ACL-reeks plus `mbx.ready 2`, zonder `mbx.time`. Hoe hij de wijziging opmerkt, is aan de daemon. De radio accepteert een ACL-reeks altijd en idempotent: een peer die al in de cache zit, komt er niet nog eens in. Een peer die uit de ACL verdween (`deny`) blijft in de cache tot hij verdrongen wordt; de cache dient alleen voor ontsleutelen en routeren, de daemon weigert een geweigerde afzender zelf met NOT_AUTH. Een herstart van de daemon na `owner-add` is niet meer nodig.
 
-`test/rdm_vectors/mailbox_conformance.json`: lijst van cases; elke case is een lijst stappen `{"t": <sec>, "op": "store|reg|fetch|stat|owner_add|deny|advance", "args": {...}, "expect": {...}}`. Hex-strings voor binaire velden. Draaien in `test_mbxd.py` (tegen `mbxd` zonder seriële poort) en `test_rdm_mailbox_conformance` (tegen `MemMailboxBackend`). Een case die in één van beide faalt, blokkeert WP7 en WP8.
+Versie. De radio wordt ready op `mbx.ready 2` en alleen daarop. Op `mbx.ready` met een andere versie, of zonder versie (protocol 1), wordt hij niet ready, stopt hij de herhaling van HELLO, onthoudt hij de versie van de daemon (de display van de mailbox toont `Pi: proto <n>`) en wacht hij op een volgende `mbx.hello?`, bijvoorbeeld na een upgrade van de daemon. Niet ready betekent zoals in par. 3.15: DEPOSIT en REG krijgen NO_STORAGE, FETCH en STATUS geen antwoord. De daemon die een HELLO met een andere versie ontvangt, of de v1-vorm `@MBX HELLO [<fw_versie>]` zonder versieveld (eerste veld geen decimaal getal), logt één regel en antwoordt alleen met `mbx.ready 2`, zonder ACL en zonder `mbx.time`; een latere HELLO met `proto` = 2 krijgt gewoon de volledige reeks. Een `mbx.ready` met meer dan één veld of een niet-numeriek veld negeert de radio als ongeldige regel; `mbx.hello?` matcht alleen exact.
+
+`id` is een 32-bit teller van de radio (decimaal). De daemon verwerkt regels strikt op volgorde. Toestanden, TTL, quotum, token, denylist en RESYNC volgen `03` par. 4 en 11; de conformance-vectoren en `examples/mailbox_server/meshcore-mailboxd/README.md` leggen de details vast en zijn daarin normatief (WP8): quotum telt STORED, SENT en ON_RADIO; controlevolgorde TOO_BIG, UNKNOWN_OWNER, NOT_AUTH, ALREADY_STORED, QUOTA; ALREADY_STORED alleen bij dezelfde afzender en owner; elk rapport telt in `rapporten_ok`; STAT toont alleen eigen berichten; foutieve regels krijgen geen antwoord (de radio valt na 3 s terug op NO_STORAGE). Het sessiegedrag op regelniveau staat in `test/rdm_vectors/mbxd_session.json` (par. 3.17).
+
+### 3.17 Conformance- en sessievectoren
+
+`test/rdm_vectors/mailbox_conformance.json`: lijst van cases; elke case is een lijst stappen `{"t": <sec>, "op": "store|reg|fetch|stat|owner_add|deny|advance", "args": {...}, "expect": {...}}`. Hex-strings voor binaire velden. Draaien in de conformance-runner van `meshcore-mailboxd` (`cargo test`, zonder seriële poort) en in `test_rdm_mailbox_conformance` (tegen `MemMailboxBackend`). Een case die in één van beide faalt, blokkeert WP7 en WP8.
+
+`test/rdm_vectors/mbxd_session.json`: het sessieprotocol van par. 3.16 op regelniveau. Elke case is een lijst stappen van twee soorten: een gebeurtenis `{"op": ..., "t": <sec>, "args": {...}}` aan één kant (`pi_start`, `owner_add`, `deny`, `undeny`, `radio_boot`, `radio_ms`, `radio_reg`, `assert_radio`) of een regelstap `{"from": "pi"|"radio", "lines": [...]}`: de kant die `from` noemt, moet precies die regels hebben gestuurd sinds zijn vorige regelstap; de andere kant krijgt ze als invoer. `players` per case zegt welke kant de case kan spelen (standaard beide): een v1-HELLO kan alleen de daemonfixture invoeren, een `mbx.ready 3` alleen de radiotest. Consumenten: `test_serial_pi_backend.cpp` (radiokant) en de golden fixtures van `meshcore-mailboxd` (daemonkant). Het bestand beschrijft het formaat zelf onder `format`.
 
 ## 4. Mappen en bestanden
 
