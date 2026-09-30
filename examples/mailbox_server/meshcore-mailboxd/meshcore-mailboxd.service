@@ -1,5 +1,6 @@
 # Holds the serial port of the mailbox radio (examples/mailbox_server) and keeps the deposited DMs in SQLite.
 # Install: see README.md next to this file. Adjust the --port path to your radio.
+# owner-add, deny and undeny run next to the service; it picks the change up itself, no restart or reload needed.
 [Unit]
 Description=MeshCore DM mailbox daemon (meshcore-mailboxd)
 
