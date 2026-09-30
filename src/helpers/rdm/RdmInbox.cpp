@@ -1,5 +1,6 @@
 #include "RdmInbox.h"
 
+#include "RdmBytes.h"
 #include "RdmCrypto.h"
 
 #include <string.h>
@@ -18,17 +19,10 @@ constexpr uint8_t IX_SYNCED  = 0x02;      // register
 constexpr uint8_t IX_PENDING = 0x04;      // register
 constexpr uint8_t IX_OFFERED = 0x02;      // inbox: handed to the app on this connection
 
-void putU32(uint8_t* p, uint32_t v) {
-  p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
-}
-uint32_t getU32(const uint8_t* p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
 void packIn(const InRecord& r, uint8_t* p) {
   memcpy(p, r.sender_prefix, 6);
-  putU32(p + 6, r.ts);
-  putU32(p + 10, r.recv_time);
+  put32(p + 6, r.ts);
+  put32(p + 10, r.recv_time);
   p[14] = r.txt_type;
   p[15] = r.path_len;
   p[16] = (uint8_t)r.snr_x4;
@@ -40,8 +34,8 @@ void packIn(const InRecord& r, uint8_t* p) {
 
 void unpackIn(const uint8_t* p, InRecord& r) {
   memcpy(r.sender_prefix, p, 6);
-  r.ts = getU32(p + 6);
-  r.recv_time = getU32(p + 10);
+  r.ts = get32(p + 6);
+  r.recv_time = get32(p + 10);
   r.txt_type = p[14];
   r.path_len = p[15];
   r.snr_x4 = (int8_t)p[16];
@@ -54,27 +48,26 @@ void unpackIn(const uint8_t* p, InRecord& r) {
 
 void packReg(const RegRecord& r, uint8_t* p) {
   memcpy(p, r.sender_prefix, 6);
-  putU32(p + 6, r.ts);
+  put32(p + 6, r.ts);
   memcpy(p + 10, r.key, 4);
   memcpy(p + 14, r.ack_r, 4);
   memcpy(p + 18, r.ack_s, 6);
   p[24] = r.state;
   p[25] = r.flags;
   memcpy(p + 26, r.mbx_hash, 8);
-  p[34] = (uint8_t)r.inbox_slot;
-  p[35] = (uint8_t)(r.inbox_slot >> 8);
+  put16(p + 34, r.inbox_slot);
 }
 
 void unpackReg(const uint8_t* p, RegRecord& r) {
   memcpy(r.sender_prefix, p, 6);
-  r.ts = getU32(p + 6);
+  r.ts = get32(p + 6);
   memcpy(r.key, p + 10, 4);
   memcpy(r.ack_r, p + 14, 4);
   memcpy(r.ack_s, p + 18, 6);
   r.state = p[24];
   r.flags = p[25];
   memcpy(r.mbx_hash, p + 26, 8);
-  r.inbox_slot = (uint16_t)(p[34] | (p[35] << 8));
+  r.inbox_slot = get16(p + 34);
 }
 
 bool samePrefix(const uint8_t* a, const uint8_t* b) { return memcmp(a, b, 6) == 0; }

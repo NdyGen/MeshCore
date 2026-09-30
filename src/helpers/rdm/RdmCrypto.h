@@ -5,6 +5,10 @@
 
 namespace rdm { namespace crypto {
 
+// Packet type of a TXT_MSG as mesh::Packet hashes it. The core stays free of Packet.h; RdmChatMesh.cpp asserts
+// that this equals PAYLOAD_TYPE_TXT_MSG.
+constexpr uint8_t PAYLOAD_TYPE_TXT = 0x02;
+
 // ACK_R: exactly the upstream formula (BaseChatMesh::composeMsgPacket): sha256(ts|flags|text, sender_pub)[0:4]
 void ackR(uint8_t out[4], uint32_t ts, uint8_t flags, const char* text, size_t text_len, const uint8_t sender_pub[32]);
 // ACK_S: SHA256("RDMS" | ts | (txt_type << 2) | text | sender_pub)[0:6]

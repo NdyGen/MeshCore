@@ -1,6 +1,10 @@
 #include "RdmChatMesh.h"
 
+#include <helpers/rdm/RdmCrypto.h>
+
 #include <string.h>
+
+static_assert(rdm::crypto::PAYLOAD_TYPE_TXT == PAYLOAD_TYPE_TXT_MSG, "the mailbox packet hash must use the TXT_MSG type");
 
 // Same defaults as BaseChatMesh.cpp, so fork ACKs and replies keep upstream timing.
 #ifndef TXT_ACK_DELAY

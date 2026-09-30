@@ -1,5 +1,7 @@
 #include "RdmStorage.h"
 
+#include "RdmBytes.h"
+
 #include <string.h>
 
 namespace rdm {
@@ -18,11 +20,6 @@ static uint16_t crc16(uint16_t crc, const uint8_t* d, uint32_t n) {   // CRC-16/
   }
   return crc;
 }
-
-static void put16(uint8_t* p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
-static void put32(uint8_t* p, uint32_t v) { put16(p, (uint16_t)v); put16(p + 2, (uint16_t)(v >> 16)); }
-static uint16_t get16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
-static uint32_t get32(const uint8_t* p) { return get16(p) | ((uint32_t)get16(p + 2) << 16); }
 
 static uint16_t crcStart(uint32_t seq, bool used) {
   uint8_t b[5];

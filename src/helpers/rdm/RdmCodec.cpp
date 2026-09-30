@@ -1,5 +1,7 @@
 #include "RdmCodec.h"
 
+#include "RdmBytes.h"
+
 #include <string.h>
 
 namespace rdm { namespace codec {
@@ -14,19 +16,9 @@ static const size_t REPORT_LEN = 8 + 1 + 6;
 static const size_t QUERY_ITEM_LEN = 4 + 4;
 static const size_t REPLY_ITEM_LEN = 1 + 6;
 
-static void put32(uint8_t* p, uint32_t v) {
-  p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
-}
-
-static uint32_t get32(const uint8_t* p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
+// from may lie past the end (parseTxtPlain: a NUL as the last byte)
 static bool zeroTail(const uint8_t* d, size_t from, size_t len) {
-  for (size_t i = from; i < len; i++) {
-    if (d[i] != 0) return false;
-  }
-  return true;
+  return from >= len || isZero(d + from, len - from);
 }
 
 static bool validCode(uint8_t c) {

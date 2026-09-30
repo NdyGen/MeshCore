@@ -1,18 +1,12 @@
 #include "RdmClock.h"
+
+#include "RdmBytes.h"
 #include "RdmConfig.h"
 
 namespace rdm {
 
 // Longest wait millisUntil() reports: keeps millis_now + wait clear of wrap-around in signed comparisons.
 static const uint32_t MAX_WAIT_MS = 0x7FFFFFFF;
-
-static void put32(uint8_t* p, uint32_t v) {
-  p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
-}
-
-static uint32_t get32(const uint8_t* p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
 
 // Out-of-class definitions for C++11 builds (nRF52): Node binds these members to references.
 constexpr uint16_t    Clock::RECORD_SIZE;

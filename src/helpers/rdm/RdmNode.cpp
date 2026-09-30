@@ -1,5 +1,6 @@
 #include "RdmNode.h"
 
+#include "RdmBytes.h"
 #include "RdmCodec.h"
 #include "RdmCrypto.h"
 
@@ -36,8 +37,8 @@ uint16_t scaled(uint16_t max, uint16_t min, uint64_t num, uint64_t den) {
 uint16_t existingSlots(FileIO& io, const char* path, uint16_t payload, uint16_t max) {
   uint8_t h[16];
   if (io.size(path) < 16 || !io.read(path, 0, h, sizeof(h)) || memcmp(h, "RDMF", 4) != 0) return 0;
-  if ((uint16_t)(h[6] | (h[7] << 8)) != payload) return 0;
-  uint16_t slots = (uint16_t)(h[8] | (h[9] << 8));
+  if (get16(&h[6]) != payload) return 0;
+  uint16_t slots = get16(&h[8]);
   return slots > max ? max : slots;
 }
 
@@ -50,16 +51,6 @@ uint32_t existingBytes(FileIO& io) {
     if (s > 0) n += (uint32_t)s;
   }
   return n;
-}
-
-bool isZero(const uint8_t* p, size_t n) {
-  for (size_t i = 0; i < n; i++)
-    if (p[i]) return false;
-  return true;
-}
-
-uint32_t get32(const uint8_t* p) {
-  return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
 }
 
 }  // namespace
