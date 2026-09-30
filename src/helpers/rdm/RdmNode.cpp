@@ -103,6 +103,7 @@ bool Node::begin() {
   shutdown();
   _n_hidden = 0;
   _has_own_mbx = false;
+  _rtc_trusted = false;
   memset(_pending, 0, sizeof(_pending));
   memset(_gap, 0, sizeof(_gap));
 
@@ -143,7 +144,20 @@ void Node::setEnabled(bool on) { _enabled = on; }
 uint32_t Node::now() {
   bool trusted = false;
   uint32_t rtc = _app.rtcNow(trusted);
-  _now = _clock.get().now(_mesh.millis(), rtc, trusted);
+  Clock& clock = _clock.get();
+  uint32_t ms = _mesh.millis();
+  if (trusted && !_rtc_trusted) {
+    // G6: the first trusted time since boot. Until now the clock counted on-time only (D1); what the outbox
+    // timestamped since boot moves along with the jump, and the jump is persisted at once so the clock never
+    // runs back past it after a power loss (in begin() the outbox is still empty: nothing to move).
+    _rtc_trusted = true;
+    uint32_t lagging = clock.now(ms, 0, false);
+    _now = clock.now(ms, rtc, true);
+    if (_now > lagging) _outbox.get().onClockJump(_now - lagging);
+    clock.maybePersist(ms, true);
+    return _now;
+  }
+  _now = clock.now(ms, rtc, trusted);
   return _now;
 }
 

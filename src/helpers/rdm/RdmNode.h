@@ -132,6 +132,7 @@ private:
   bool     _ready = false;          // begin() succeeded
   bool     _enabled = true;         // setEnabled(); RDM runs only when both are true
   uint32_t _now = 0;                // RDM time of the latest now()
+  bool     _rtc_trusted = false;    // the RTC has been trusted since begin(): the clock jump (G6) is behind us
   bool     _has_own_mbx = false;
   uint8_t  _own_mbx[32];
   uint8_t  _k_owner[16];

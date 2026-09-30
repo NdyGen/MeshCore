@@ -158,6 +158,7 @@ bool Outbox::begin(uint32_t now) {
   for (uint8_t k = 0; k < _n_watch; k++) {
     WatchIdx& w = _watch[k];
     w.used = _watch_file.read(k, wbuf);
+    w.lag = false;
     if (!w.used) continue;
     memcpy(w.ack_s, wbuf, 6);
     w.expires = get32(wbuf + 6);
@@ -181,7 +182,7 @@ bool Outbox::begin(uint32_t now) {
     armSlot(s, now);
 
     OutEntry& e = s.e;
-    uint32_t age = now - e.created;
+    uint32_t age = now > e.created ? now - e.created : 0;   // the clock resumes up to RDM_CLOCK_PERSIST_S behind (G6)
     OutState before = e.state;
     if (isFinal(e.state)) {
       // nothing scheduled
@@ -216,7 +217,7 @@ bool Outbox::begin(uint32_t now) {
           break;
         case OutState::ON_RADIO: {
           uint32_t since = e.deadline >= RDM_T_SYNC_S ? e.deadline - RDM_T_SYNC_S : e.created;
-          s.q_step = stepFor(SCHED_ON_RADIO, now - since);
+          s.q_step = stepFor(SCHED_ON_RADIO, now > since ? now - since : 0);
           if (e.flags & OF_MBX_COPY) s.t_status = kick; else s.t_query = kick;
           break;
         }
@@ -358,6 +359,7 @@ void Outbox::setState(uint8_t i, OutState st, uint32_t now) {
   s.st_repeat = s.q_repeat = s.final_sent = false;
   if (isFinal(st)) {
     s.e.final_at = now;
+    s.lag |= LAG_FINAL;
     clearReq(s);
     s.t_dm = s.t_query = s.t_status = s.t_deposit = NEVER;
   }
@@ -400,7 +402,9 @@ void Outbox::leaveCopy(Slot& s, uint32_t now) {
   if (s.e.state != OutState::CUSTODY && s.e.state != OutState::ON_RADIO) return;
   uint32_t t_radio = addT(s.e.created, RDM_T_RADIO_S);
   uint32_t min_end = addT(now, RDM_RETRY_AFTER_LOSS_S);
-  s.e.deadline = t_radio > min_end ? t_radio : min_end;
+  bool from_now = min_end >= t_radio;
+  s.e.deadline = from_now ? min_end : t_radio;
+  if (from_now || (s.lag & LAG_CREATED)) s.lag |= LAG_DEADLINE; else s.lag &= ~LAG_DEADLINE;
 }
 
 void Outbox::enterRetry(uint8_t i, uint32_t now, bool start_series) {
@@ -435,6 +439,7 @@ void Outbox::enterOnRadio(uint8_t i, uint32_t now) {
     s.t_status = NEVER;
   }
   s.e.deadline = now + RDM_T_SYNC_S;
+  s.lag |= LAG_DEADLINE;
   setState(i, OutState::ON_RADIO, now);
 }
 
@@ -450,6 +455,7 @@ void Outbox::enterCustody(uint8_t i, uint32_t ttl_s, uint32_t now) {
   s.t_query = now + jittered(RDM_CUSTODY_PROBE_S);
   s.e.flags |= OF_MBX_COPY;
   s.e.deadline = now + (ttl_s < RDM_T_MAX_CUSTODY_S ? ttl_s : RDM_T_MAX_CUSTODY_S) + RDM_CUSTODY_GRACE_S;   // G10
+  s.lag |= LAG_DEADLINE;
   setState(i, OutState::CUSTODY, now);
 }
 
@@ -565,6 +571,7 @@ Outbox::SendResult Outbox::onAppSend(const uint8_t pub_prefix[6], uint32_t ts, u
   e.app_ack = app_ack_out;
   e.created = now;
   e.deadline = addT(now, RDM_T_RADIO_S);
+  s.lag = LAG_CREATED | LAG_DEADLINE;
   e.text_len = (uint8_t)text_len;
   memcpy(e.text, text, text_len);
   e.text[text_len] = 0;
@@ -622,6 +629,7 @@ bool Outbox::addCtrl(const uint8_t pub_prefix[6], const uint8_t* ctrl_plain, siz
   e.flags = OF_CTRL;
   e.created = now;
   e.deadline = addT(now, RDM_T_RADIO_S);
+  s.lag = LAG_CREATED | LAG_DEADLINE;
   e.text_len = (uint8_t)body_len;
   memcpy(e.text, body, body_len);
   computeAcks(s);   // the CTRL ack doubles as app_ack and is part of the record
@@ -806,6 +814,7 @@ void Outbox::onStatusReply(const uint8_t pub_prefix[6], const uint8_t (*asked)[8
         case MbxState::STORED:
           if (final_check) {
             s.e.deadline = now + RDM_CUSTODY_GRACE_S;   // M still keeps it past its own expiry: look again later
+            s.lag |= LAG_DEADLINE;
             s.final_sent = false;
             persist(i);
           }
@@ -945,6 +954,7 @@ void Outbox::addWatch(const Slot& s, uint32_t now) {
   }
   WatchIdx& w = _watch[idx];
   w.used = true;
+  w.lag = true;
   memcpy(w.ack_s, s.ack_s, 6);
   w.expires = expires;
 }
@@ -1056,6 +1066,29 @@ int Outbox::dueAction(uint32_t now, Action& a_out) const {
     }
   }
   return best;
+}
+
+void Outbox::onClockJump(uint32_t delta) {
+  _idle_until = 0;
+  for (uint8_t i = 0; i < _n_slots; i++) {
+    Slot& s = _slots[i];
+    if (!s.used || !s.lag) continue;
+    if (s.lag & LAG_CREATED) s.e.created = addT(s.e.created, delta);
+    if (s.lag & LAG_DEADLINE) s.e.deadline = addT(s.e.deadline, delta);
+    if (s.lag & LAG_FINAL) s.e.final_at = addT(s.e.final_at, delta);
+    s.lag = 0;
+    persist(i);
+  }
+  uint8_t buf[WATCH_RECORD_SIZE];
+  for (uint8_t k = 0; k < _n_watch; k++) {
+    WatchIdx& w = _watch[k];
+    if (!w.used || !w.lag) continue;
+    w.lag = false;
+    if (!_watch_file.read(k, buf)) continue;
+    w.expires = addT(w.expires, delta);
+    put32(buf + 6, w.expires);
+    _watch_file.write(k, buf);
+  }
 }
 
 void Outbox::loop(uint32_t now) {

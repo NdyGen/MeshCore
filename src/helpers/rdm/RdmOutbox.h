@@ -67,6 +67,9 @@ public:
   void       onMailboxAdvert(const uint8_t mbx_pub_prefix[6], uint32_t now);
   void       onMailboxChanged(const uint8_t pub_prefix[6], uint32_t now);  // new MBX_INFO or REVOKE (G14)
   void       onClientConnected(bool rdm_client, uint32_t now);             // G5
+  // The RDM clock jumped `delta` s ahead when the RTC became trusted (G6). Timestamps taken since boot move along:
+  // until then the clock counted on-time only (D1), so the jump is not time elapsed for them.
+  void       onClockJump(uint32_t delta);
   void       loop(uint32_t now);
   // Earliest RDM time (s) at which loop() acts (next DM/probe/query/deposit/status/register, request timeout,
   // deadline, final_at + RDM_FINAL_KEEP_S). Never earlier than now; UINT32_MAX: nothing scheduled.
@@ -90,6 +93,7 @@ private:
     uint8_t  ack_r[4][4];           // per attempt class; OF_CTRL: [0] is the CTRL ack
     uint8_t  ack_s[6];
     uint8_t  reported;              // UserStatus + 1 of the latest 0x91 attempt, 0: none yet
+    uint8_t  lag;                   // LAG_*: fields of `e` timestamped since boot, which onClockJump() moves
     bool     in_series;             // RETRY series running: its first action already scheduled (G16)
     uint8_t  req;                   // open request to the mailbox (Req)
     uint32_t wait_until;            // NEW/WAIT_ACK timeout or timeout of `req`
@@ -116,9 +120,11 @@ private:
   };
   struct WatchIdx {                 // RAM index of /rdm/watch (receipt watch after SYNC_EXPIRED, G2)
     bool     used;
+    bool     lag;                   // written since boot: onClockJump() moves `expires`
     uint8_t  ack_s[6];
     uint32_t expires;
   };
+  enum : uint8_t { LAG_CREATED = 0x01, LAG_DEADLINE = 0x02, LAG_FINAL = 0x04 };
 
   Slot     _slots[RDM_OUTBOX_SLOTS_MAX];
   Peer     _peers[RDM_OUTBOX_SLOTS_MAX];

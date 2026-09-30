@@ -1853,3 +1853,131 @@ int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }
+
+// ---- clock jump at the first trusted time (D1, G6) ----
+// Until the RTC is trusted the RDM clock counts on-time only. When it then jumps to the wall clock, what was
+// timestamped since boot moves along; records from earlier boots were on the trusted scale already.
+
+TEST_F(OutboxTest, ClockJumpDoesNotAgeAFinalReachedBeforeIt) {
+  host.rdm_client = false;
+  uint32_t app_ack = send("hi");
+  sendAck("hi", true);
+  sendAckS("hi");
+  ASSERT_EQ(state(), OutState::DELIVERED);
+  uint32_t fin = now;
+  ob->onClockJump(2 * DAY);
+  now = host.now = fin + 2 * DAY;
+  EXPECT_EQ(entry().final_at, fin + 2 * DAY);
+  EXPECT_EQ(ob->nextDue(now), fin + 2 * DAY + RDM_FINAL_KEEP_S);
+  loopAt(now);
+  ASSERT_EQ(ob->count(), 1) << "the two days before the jump are not two days since the final state (G2)";
+  host.rdm_client = true;
+  ob->onClientConnected(true, now);
+  EXPECT_EQ(lastStatus(), UserStatus::DELIVERED);
+  EXPECT_EQ(host.status.back().e.app_ack, app_ack);
+  EXPECT_EQ(ob->count(), 0);
+}
+
+TEST_F(OutboxTest, ClockJumpMovesCreatedAndTRadioOfEntriesMadeSinceBootAndPersistsThem) {
+  host.rdm_client = false;
+  send("hi");
+  timeout();
+  ASSERT_EQ(state(), OutState::RETRY);
+  ob->onClockJump(30 * DAY);
+  EXPECT_EQ(entry().created, T0 + 30 * DAY);
+  EXPECT_EQ(entry().deadline, T0 + 30 * DAY + RDM_T_RADIO_S);
+  boot(T0 + 30 * DAY);
+  EXPECT_EQ(entry().created, T0 + 30 * DAY) << "the shifted record is on flash";
+  runTo(T0 + 30 * DAY + RDM_T_RADIO_S - 1);
+  EXPECT_EQ(state(), OutState::RETRY);
+  loopAt(T0 + 30 * DAY + RDM_T_RADIO_S);
+  EXPECT_EQ(state(), OutState::EXPIRED);
+}
+
+TEST_F(OutboxTest, ClockJumpLeavesRecordsFromEarlierBootsAlone) {
+  host.rdm_client = false;
+  send("hi");
+  sendAck("hi", true);
+  ASSERT_EQ(state(), OutState::ON_RADIO);
+  boot(T0 + 100);
+  uint32_t writes = io.writeCalls();
+  ob->onClockJump(10 * DAY);
+  EXPECT_EQ(io.writeCalls(), writes) << "nothing to shift, nothing written";
+  EXPECT_EQ(entry().created, T0);
+  EXPECT_EQ(entry().deadline, T0 + RDM_T_SYNC_S);
+}
+
+// leaveCopy: the deadline comes from `created` (earlier boot, trusted scale) or from `now` (this boot, on-time
+// scale); only the latter moves.
+TEST_F(OutboxTest, ClockJumpMovesAFallbackDeadlineOnlyWhenItCameFromNow) {
+  host.rdm_client = false;
+  send("hi");
+  sendAck("hi", true);
+  boot(T0 + 100);
+  reply("hi", QueryState::UNKNOWN);
+  ASSERT_EQ(state(), OutState::RETRY);
+  ASSERT_EQ(entry().deadline, T0 + RDM_T_RADIO_S) << "created + T_radio, from before this boot";
+  ob->onClockJump(DAY);
+  EXPECT_EQ(entry().deadline, T0 + RDM_T_RADIO_S);
+
+  boot(T0 + 100);
+  send("late");
+  sendAck("late", true);
+  boot(T0 + RDM_T_RADIO_S - 3600);
+  reply("late", QueryState::UNKNOWN);
+  uint32_t idx = ob->count() - 1;
+  ASSERT_EQ(state(idx), OutState::RETRY);
+  ASSERT_EQ(entry(idx).deadline, now + RDM_RETRY_AFTER_LOSS_S) << "at least a day more, from now";
+  ob->onClockJump(DAY);
+  EXPECT_EQ(entry(idx).deadline, now + RDM_RETRY_AFTER_LOSS_S + DAY);
+  EXPECT_EQ(entry(0).deadline, T0 + RDM_T_RADIO_S) << "the other entry was not touched since boot";
+}
+
+TEST_F(OutboxTest, ClockJumpMovesTheOnRadioAndCustodyDeadlines) {
+  host.rdm_client = false;
+  send("radio");
+  sendAck("radio", true);
+  ASSERT_EQ(entry(0).deadline, T0 + RDM_T_SYNC_S);
+  uint32_t in_custody = toCustody("custody", 10 * DAY);
+  ASSERT_EQ(entry(1).deadline, in_custody + 10 * DAY + RDM_CUSTODY_GRACE_S);
+  ob->onClockJump(20 * DAY);
+  EXPECT_EQ(entry(0).deadline, T0 + 20 * DAY + RDM_T_SYNC_S);
+  EXPECT_EQ(entry(1).deadline, in_custody + 20 * DAY + 10 * DAY + RDM_CUSTODY_GRACE_S);
+  now = host.now = in_custody + 20 * DAY;
+  runTo(T0 + 20 * DAY + RDM_T_SYNC_S - 1);
+  EXPECT_EQ(state(0), OutState::ON_RADIO) << "T_sync counts from the shifted ON_RADIO moment";
+}
+
+TEST_F(OutboxTest, ClockJumpMovesAReceiptWatchMadeSinceBoot) {
+  send("hi");
+  sendAck("hi", true);
+  runTo(now + RDM_T_SYNC_S);
+  ASSERT_EQ(lastStatus(), UserStatus::SYNC_EXPIRED);
+  uint32_t expired_at = now;
+  ob->onClockJump(100 * DAY);
+  now = host.now = expired_at + 100 * DAY + RDM_WATCH_S - 1;
+  boot(now);
+  EXPECT_TRUE(sendAckS("hi")) << "the watch record on flash moved along with the jump";
+  EXPECT_EQ(lastStatus(), UserStatus::DELIVERED);
+}
+
+TEST_F(OutboxTest, ClockJumpLeavesAReceiptWatchFromAnEarlierBootAlone) {
+  send("hi");
+  sendAck("hi", true);
+  runTo(now + RDM_T_SYNC_S);
+  ASSERT_EQ(lastStatus(), UserStatus::SYNC_EXPIRED);
+  uint32_t expired_at = now;
+  boot(now + 1);
+  ob->onClockJump(100 * DAY);
+  now = host.now = expired_at + RDM_WATCH_S;
+  loopAt(now);
+  EXPECT_FALSE(sendAckS("hi")) << "expired on the trusted scale it was written on";
+}
+
+TEST_F(OutboxTest, ClockJumpMovesTheCreatedTimeOfACtrlEntry) {
+  std::vector<uint8_t> p = ctrlPlain(5000, CTRL_MBX_INFO, 0x77);
+  ASSERT_TRUE(ob->addCtrl(ALICE, p.data(), p.size(), now));
+  ob->onClockJump(DAY);
+  EXPECT_EQ(entry().created, T0 + DAY);
+  EXPECT_EQ(entry().deadline, T0 + DAY + RDM_T_RADIO_S);
+}
