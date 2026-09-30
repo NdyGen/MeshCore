@@ -4,7 +4,8 @@
 //!
 //! Session protocol v2 (`06` par. 3.16): the daemon asks `mbx.hello?` when it starts; a HELLO with its own
 //! protocol version gets the ACL, `mbx.ready 2` and `mbx.time`, any other HELLO only `mbx.ready 2`. Requests
-//! are answered whatever the session state; the radio holds them back itself until it is ready.
+//! are answered whatever the session state; the radio holds them back itself until it is ready. When the admin
+//! command line changed the database from another process, the ACL series goes out again, without `mbx.time`.
 
 use log::{error, info, warn};
 
@@ -242,8 +243,11 @@ impl<S: Storage, C: Clock> Session<S, C> {
         Ok(replies)
     }
 
-    /// The radio's peer cache: every ACL entry, closed by `mbx.ready` with our version.
+    /// The radio's peer cache: every ACL entry, closed by `mbx.ready` with our version. What another process
+    /// committed before this read is in the series, so it is taken off the change check first; a commit that
+    /// slips in between shows up at the next check as one series too many, never as one too few.
     fn acl_series(&mut self) -> Result<Vec<Reply>, StorageError> {
+        self.mailbox.changed_elsewhere()?;
         let mut replies: Vec<Reply> = self
             .mailbox
             .acl()?
@@ -261,6 +265,21 @@ impl<S: Storage, C: Clock> Session<S, C> {
     /// A due `mbx.time`, checked after every line and whenever the radio is quiet.
     pub fn tick(&mut self) -> Option<Reply> {
         self.beacon.due(self.clock.now())
+    }
+
+    /// The ACL series again when another process changed the database (`owner-add`, `deny`, `undeny`), so the
+    /// radio's peer cache follows without a restart. Nothing when nothing changed. An error means the ACL is
+    /// unreadable, which ends the session like it does at HELLO.
+    pub fn refresh_acl(&mut self) -> Result<Vec<Reply>, StorageError> {
+        if !self.mailbox.changed_elsewhere()? {
+            return Ok(Vec::new());
+        }
+        let series = self.acl_series()?;
+        info!(
+            "database changed by another process, pushing the ACL again ({} entries)",
+            series.len() - 1
+        );
+        Ok(series)
     }
 }
 

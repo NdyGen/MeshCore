@@ -302,6 +302,101 @@ fn invalid_utf8_on_stdin_is_debug_output() {
     );
 }
 
+/// `serve --port` on a pseudo-terminal: the ACL push after `owner-add`, `deny` and `undeny` in another process
+/// reaches the serial path as well, and carries no `mbx.time`. The quiet port yields the idle events that drive
+/// the poll, so no request has to come in first.
+#[cfg(unix)]
+#[test]
+fn serial_port_gets_the_acl_push_after_admin_commands() {
+    use nix::fcntl::OFlag;
+    use nix::pty::{grantpt, posix_openpt, ptsname_r, unlockpt};
+    use std::os::fd::OwnedFd;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("pty.db");
+    ok(daemon(
+        &db,
+        &["owner-add", &hex(&owner()), "--k-owner", &hex(&k_owner())],
+        None,
+    ));
+    let master = posix_openpt(OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_CLOEXEC).unwrap();
+    grantpt(&master).unwrap();
+    unlockpt(&master).unwrap();
+    let port = ptsname_r(&master).unwrap();
+    let master: std::fs::File = OwnedFd::from(master).into();
+    let mut radio = master.try_clone().unwrap();
+    let mut child = Command::new(daemon_bin())
+        .arg("--db")
+        .arg(&db)
+        .args(["serve", "--port", &port])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        BufReader::new(master)
+            .lines()
+            .map_while(Result::ok)
+            .for_each(|l| tx.send(l).unwrap_or(()))
+    });
+    let next = || {
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("no line within 10 s")
+    };
+    let owner2 = sha256(b"owner2");
+    let acl_owner = format!("mbx.acl {} o {}", hex(&owner()), o4(&owner()));
+    let acl_owner2 = format!("mbx.acl {} o {}", hex(&owner2), o4(&owner2));
+
+    assert_eq!(next(), "mbx.hello?", "the daemon opened the port");
+    writeln!(radio, "@MBX HELLO 2 pty").unwrap();
+    assert_eq!(next(), acl_owner);
+    assert_eq!(next(), "mbx.ready 2");
+    assert!(next().starts_with("mbx.time "));
+
+    ok(daemon(
+        &db,
+        &["owner-add", &hex(&owner2), "--k-owner", &hex(&k_owner())],
+        None,
+    ));
+    assert_eq!(next(), acl_owner, "pushed while the port was quiet");
+    assert_eq!(next(), acl_owner2);
+    assert_eq!(next(), "mbx.ready 2");
+    writeln!(
+        radio,
+        "{}",
+        reg_line(
+            1,
+            &hex(&bob()),
+            &o4(&owner()),
+            &hex(&token(&bob(), &k_owner()))
+        )
+    )
+    .unwrap();
+    assert_eq!(next(), "mbx.reg 1 00 7 20", "no mbx.time after the push");
+
+    ok(daemon(&db, &["deny", &o4(&owner()), &hex(&bob())], None));
+    assert_eq!(next(), acl_owner);
+    assert_eq!(next(), acl_owner2);
+    assert_eq!(next(), "mbx.ready 2", "deny dropped the registration");
+    ok(daemon(&db, &["undeny", &o4(&owner()), &hex(&bob())], None));
+    assert_eq!(next(), acl_owner);
+    assert_eq!(next(), acl_owner2);
+    assert_eq!(
+        next(),
+        "mbx.ready 2",
+        "undeny: pushed, still without the depositor"
+    );
+    writeln!(radio, "@MBX HELLO 2 pty").unwrap();
+    assert_eq!(next(), acl_owner);
+    assert_eq!(next(), acl_owner2);
+    assert_eq!(next(), "mbx.ready 2");
+    assert!(next().starts_with("mbx.time "));
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
 /// Everything in the database except `owners.created`, which each CLI run takes from the real clock.
 fn dump(db: &Path) -> Vec<String> {
     let c = rusqlite::Connection::open(db).unwrap();

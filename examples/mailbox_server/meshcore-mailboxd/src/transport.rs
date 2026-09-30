@@ -1,8 +1,9 @@
 //! Feeding a [`Session`] from a byte stream and writing its replies back: stdin/stdout or the serial port.
 
 use std::collections::VecDeque;
-use std::io::{self, BufRead, Read, Write};
-use std::time::Duration;
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 use crate::session::Session;
 use crate::storage::{Storage, StorageError};
@@ -24,6 +25,10 @@ pub enum ServeError {
     Storage(#[from] StorageError),
 }
 
+/// How often the session looks for a database change by the admin command line: at the first event, then at
+/// most once per interval. The quiet [`Event::Idle`] every [`IDLE`] keeps that going without traffic.
+pub const ACL_POLL: Duration = Duration::from_secs(1);
+
 /// Announces the daemon (`mbx.hello?`), then runs the session until the events end, flushing the replies of
 /// every event before taking the next.
 pub fn serve<S: Storage, C: Clock>(
@@ -35,12 +40,17 @@ pub fn serve<S: Storage, C: Clock>(
         writeln!(out, "{reply}")?;
     }
     out.flush()?;
+    let mut last_poll: Option<Instant> = None;
     for event in events {
         let mut replies = match event? {
             Event::Line(line) => session.handle_line(&line)?,
             Event::Idle => Vec::new(),
         };
         replies.extend(session.tick());
+        if last_poll.is_none_or(|t| t.elapsed() >= ACL_POLL) {
+            last_poll = Some(Instant::now());
+            replies.extend(session.refresh_acl()?);
+        }
         for reply in &replies {
             writeln!(out, "{reply}")?;
         }
@@ -75,25 +85,38 @@ impl LineAssembler {
     }
 }
 
-/// Lines from stdin until EOF (the simulator's `SubprocessBackend`).
-pub fn stdin_events(input: impl BufRead) -> impl Iterator<Item = io::Result<Event>> {
-    input
-        .split(b'\n')
-        .map(|line| line.map(|l| Event::Line(String::from_utf8_lossy(&l).into_owned())))
+/// How long the input stays quiet before the session gets an [`Event::Idle`].
+pub const IDLE: Duration = Duration::from_secs(1);
+
+/// Lines from stdin until EOF (the simulator's `SubprocessBackend`), and [`Event::Idle`] after [`IDLE`] without
+/// one. A thread does the blocking read, so the session keeps its timers and the ACL poll while the other side
+/// is quiet.
+pub fn stdin_events(input: impl Read + Send + 'static) -> impl Iterator<Item = io::Result<Event>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(input).split(b'\n') {
+            let line = line.map(|l| String::from_utf8_lossy(&l).into_owned());
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    std::iter::from_fn(move || match rx.recv_timeout(IDLE) {
+        Ok(line) => Some(line.map(Event::Line)),
+        Err(RecvTimeoutError::Timeout) => Some(Ok(Event::Idle)),
+        Err(RecvTimeoutError::Disconnected) => None,
+    })
 }
 
-/// Lines from the serial port, and [`Event::Idle`] after [`SERIAL_IDLE`] without a byte. Never ends by itself.
+/// Lines from the serial port, and [`Event::Idle`] after [`IDLE`] without a byte. Never ends by itself.
 pub struct SerialEvents<R: Read> {
     port: R,
     lines: LineAssembler,
     pending: VecDeque<String>,
 }
 
-/// How long the port stays quiet before the session gets an [`Event::Idle`].
-pub const SERIAL_IDLE: Duration = Duration::from_secs(1);
-
 impl<R: Read> SerialEvents<R> {
-    /// `port` must time out after [`SERIAL_IDLE`].
+    /// `port` must time out after [`IDLE`].
     pub fn new(port: R) -> Self {
         SerialEvents {
             port,
@@ -126,7 +149,7 @@ pub fn open_serial(path: &str) -> Result<Box<dyn serialport::SerialPort>, serial
     // DTR and RTS drive the ESP32's reset and boot pins; low keeps it running normally. Ports without modem
     // lines (a pty, some USB-CDC radios) refuse them, which pyserial ignores as well.
     let mut port = serialport::new(path, 115_200)
-        .timeout(SERIAL_IDLE)
+        .timeout(IDLE)
         .dtr_on_open(false)
         .open()?;
     if let Err(e) = port.write_request_to_send(false) {
@@ -201,6 +224,28 @@ mod tests {
                 Ok(Event::Idle)
             ]
         );
+    }
+
+    #[test]
+    fn stdin_events_are_lines_until_eof() {
+        let events: Vec<_> = stdin_events(io::Cursor::new(b"a\r\nb\n\nc".to_vec()))
+            .map(Result::unwrap)
+            .collect();
+        let line = |s: &str| Event::Line(s.into());
+        assert_eq!(events, [line("a\r"), line("b"), line(""), line("c")]);
+    }
+
+    #[test]
+    fn stdin_is_idle_while_nothing_arrives() {
+        let (reader, mut writer) = io::pipe().unwrap();
+        let mut events = stdin_events(reader);
+        let started = Instant::now();
+        assert_eq!(events.next().unwrap().unwrap(), Event::Idle);
+        assert!(started.elapsed() >= IDLE);
+        writer.write_all(b"x\n").unwrap();
+        assert_eq!(events.next().unwrap().unwrap(), Event::Line("x".into()));
+        drop(writer);
+        assert!(events.next().is_none(), "EOF ends the events");
     }
 
     #[test]

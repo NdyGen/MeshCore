@@ -187,7 +187,7 @@ fn serve(db: &std::path::Path, s: &Serve) -> Result<(), CliError> {
             &mut out,
         )?);
     }
-    let events = transport::stdin_events(io::stdin().lock());
+    let events = transport::stdin_events(io::stdin());
     let mut out = io::stdout().lock();
     if s.fake_clock {
         // the simulator sets the clock with `@MBX TIME` before its first request

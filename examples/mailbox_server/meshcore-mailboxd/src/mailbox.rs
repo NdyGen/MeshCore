@@ -29,6 +29,11 @@ impl<S: Storage> Mailbox<S> {
         &self.storage
     }
 
+    /// Whether another process (the admin command line) committed since the previous call or since open.
+    pub fn changed_elsewhere(&mut self) -> Result<bool, StorageError> {
+        self.storage.changed_elsewhere()
+    }
+
     fn atomically<T, E: From<StorageError>>(
         &mut self,
         f: impl FnOnce(&mut S::Tx<'_>, &mut dyn KeySource) -> Result<T, E>,

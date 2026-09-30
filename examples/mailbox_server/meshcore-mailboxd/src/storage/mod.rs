@@ -24,6 +24,10 @@ pub trait Storage {
 
     /// Starts a write transaction; it holds the write lock until commit or drop.
     fn begin(&mut self) -> Result<Self::Tx<'_>, StorageError>;
+
+    /// Whether another connection (the admin command line in its own process) committed since the previous
+    /// call, or since open. The caller's own commits do not count.
+    fn changed_elsewhere(&mut self) -> Result<bool, StorageError>;
 }
 
 pub trait Transaction: Repo {

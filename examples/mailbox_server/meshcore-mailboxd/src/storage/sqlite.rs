@@ -40,6 +40,9 @@ impl From<rusqlite::Error> for StorageError {
 
 pub struct SqliteStorage {
     conn: Connection,
+    /// `PRAGMA data_version` at the previous [`Storage::changed_elsewhere`]; it moves only on commits by other
+    /// connections, in WAL mode as well.
+    data_version: i64,
 }
 
 impl SqliteStorage {
@@ -57,7 +60,12 @@ impl SqliteStorage {
         if !has_rotation {
             conn.execute("ALTER TABLE owners ADD COLUMN last_sender BLOB", [])?;
         }
-        Ok(SqliteStorage { conn })
+        let data_version = Self::data_version(&conn)?;
+        Ok(SqliteStorage { conn, data_version })
+    }
+
+    fn data_version(conn: &Connection) -> Result<i64, StorageError> {
+        Ok(conn.query_row("PRAGMA data_version", [], |r| r.get(0))?)
     }
 
     /// For tests and diagnostics; changing the database behind the storage's back is on the caller.
@@ -75,6 +83,11 @@ impl Storage for SqliteStorage {
                 .conn
                 .transaction_with_behavior(TransactionBehavior::Immediate)?,
         })
+    }
+
+    fn changed_elsewhere(&mut self) -> Result<bool, StorageError> {
+        let now = Self::data_version(&self.conn)?;
+        Ok(std::mem::replace(&mut self.data_version, now) != now)
     }
 }
 
@@ -563,6 +576,36 @@ mod tests {
             created,
             &Limits::default(),
         )
+    }
+
+    #[test]
+    fn changed_elsewhere_sees_only_other_connections_commits() {
+        let (dir, mut a) = open();
+        let mut b = SqliteStorage::open(dir.path().join("t.db")).unwrap();
+        assert!(!a.changed_elsewhere().unwrap(), "nothing yet");
+        let mut tx = a.begin().unwrap();
+        tx.put_owner(&pk(1), &KOwner([1; 16]), &Limits::default(), NOW)
+            .unwrap();
+        tx.commit().unwrap();
+        assert!(!a.changed_elsewhere().unwrap(), "own commit");
+        assert!(b.changed_elsewhere().unwrap(), "seen from the other side");
+        assert!(!b.changed_elsewhere().unwrap(), "reported once");
+        let tx = b.begin().unwrap();
+        assert!(tx.owners().unwrap().len() == 1);
+        tx.commit().unwrap();
+        assert!(
+            !a.changed_elsewhere().unwrap(),
+            "a transaction without writes"
+        );
+        let mut tx = b.begin().unwrap();
+        tx.deny(&pk(1).owner4(), &pk(2), NOW).unwrap();
+        tx.commit().unwrap();
+        assert!(a.changed_elsewhere().unwrap());
+        assert!(!a.changed_elsewhere().unwrap());
+        let mut tx = b.begin().unwrap();
+        tx.undeny(&pk(1).owner4(), &pk(2)).unwrap();
+        drop(tx);
+        assert!(!a.changed_elsewhere().unwrap(), "a rolled back transaction");
     }
 
     #[test]

@@ -5,7 +5,8 @@ mod common;
 
 use common::*;
 use meshcore_mailboxd::domain::model::Limits;
-use meshcore_mailboxd::mailbox::AdminError;
+use meshcore_mailboxd::mailbox::{AdminError, Mailbox};
+use meshcore_mailboxd::storage::SqliteStorage;
 use meshcore_mailboxd::transport::{Event, serve};
 use meshcore_mailboxd::types::{KOwner, Owner4, Pubkey, State};
 
@@ -576,6 +577,72 @@ fn hello_with_another_or_no_protocol_gets_only_ready() {
         ],
         "a later HELLO 2 gets the full series"
     );
+}
+
+#[test]
+fn acl_change_by_another_process_is_pushed_without_restart() {
+    let fx = Fixture::new();
+    let mut s = fx.session();
+    let mut admin = Mailbox::new(SqliteStorage::open(fx.path()).unwrap());
+    let owner2 = sha256(b"owner2");
+    let acl_owner = format!("mbx.acl {} o {}", hex(&owner()), o4(&owner()));
+    let acl_owner2 = format!("mbx.acl {} o {}", hex(&owner2), o4(&owner2));
+    let owner4 = Pubkey(owner()).owner4();
+    admin
+        .owner_add(
+            T0,
+            &Pubkey(owner()),
+            Some(KOwner(k_owner())),
+            Limits::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        run(&mut s, vec![line("@MBX HELLO 2 1.0-rdm")]),
+        [
+            acl_owner.clone(),
+            "mbx.ready 2".into(),
+            format!("mbx.time {T0}")
+        ]
+    );
+    assert!(run(&mut s, vec![None]).is_empty(), "nothing changed");
+
+    admin
+        .owner_add(
+            T0 + 1,
+            &Pubkey(owner2),
+            Some(KOwner(k_owner())),
+            Limits::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        run(&mut s, vec![None]),
+        [acl_owner.clone(), acl_owner2.clone(), "mbx.ready 2".into()],
+        "owner-add in another process: the series again, without mbx.time"
+    );
+    let reg = reg_line(
+        1,
+        &hex(&bob()),
+        &o4(&owner()),
+        &hex(&token(&bob(), &k_owner())),
+    );
+    assert_eq!(
+        run(&mut s, vec![line(reg), None]),
+        ["mbx.reg 1 00 7 20"],
+        "the session's own registration is no push"
+    );
+    admin.deny(T0 + 2, &owner4, &Pubkey(bob())).unwrap();
+    assert_eq!(
+        run(&mut s, vec![None]),
+        [acl_owner.clone(), acl_owner2.clone(), "mbx.ready 2".into()],
+        "deny: the depositor is gone from the series"
+    );
+    admin.undeny(&owner4, &Pubkey(bob())).unwrap();
+    assert_eq!(
+        run(&mut s, vec![None]),
+        [acl_owner.clone(), acl_owner2.clone(), "mbx.ready 2".into()],
+        "undeny: pushed again, the depositor has to register first"
+    );
+    assert!(run(&mut s, vec![None]).is_empty(), "reported once");
 }
 
 #[test]
